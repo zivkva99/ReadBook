@@ -1,18 +1,6 @@
 package com.example.readbook.data
 
-import java.time.DayOfWeek
 import java.time.LocalDate
-
-/** Sun=1, Mon=2, Tue=4, Wed=8, Thu=16, Fri=32, Sat=64 — matches [ReadingConfig.enabledDaysMask]. */
-private fun bitFor(day: DayOfWeek): Int = when (day) {
-    DayOfWeek.SUNDAY -> 0b0000001
-    DayOfWeek.MONDAY -> 0b0000010
-    DayOfWeek.TUESDAY -> 0b0000100
-    DayOfWeek.WEDNESDAY -> 0b0001000
-    DayOfWeek.THURSDAY -> 0b0010000
-    DayOfWeek.FRIDAY -> 0b0100000
-    DayOfWeek.SATURDAY -> 0b1000000
-}
 
 object StreakCalculator {
 
@@ -33,8 +21,7 @@ object StreakCalculator {
         var date = today
         var daysChecked = 0L
         while (daysChecked < MAX_LOOKBACK_DAYS) {
-            val isEnabledDay = (enabledDaysMask and bitFor(date.dayOfWeek)) != 0
-            if (isEnabledDay) {
+            if (isEnabledDay(date, enabledDaysMask)) {
                 if (date in completedDates) {
                     streak++
                 } else {

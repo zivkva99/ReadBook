@@ -2,6 +2,8 @@ package com.example.readbook.data
 
 import android.content.Context
 import androidx.room.Room
+import com.example.readbook.scheduling.NudgeScheduler
+import com.example.readbook.scheduling.NudgeSchedulingCoordinator
 
 /** Manual DI — no framework needed at this app's size. One instance, owned by [com.example.readbook.ReadingApp]. */
 class AppContainer(context: Context) {
@@ -26,5 +28,11 @@ class AppContainer(context: Context) {
             statsDao = statsDao,
             clock = SystemClock,
         )
+    }
+
+    val nudgeScheduler: NudgeScheduler by lazy { NudgeScheduler(context.applicationContext) }
+
+    val nudgeSchedulingCoordinator: NudgeSchedulingCoordinator by lazy {
+        NudgeSchedulingCoordinator(readingConfigDao = readingConfigDao, scheduler = nudgeScheduler)
     }
 }
