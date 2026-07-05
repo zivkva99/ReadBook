@@ -90,4 +90,74 @@ class DailyProgressDaoTest {
         assertEquals(2000L, result?.completedAt)
         assertNull(result?.activeSessionStartedAt)
     }
+
+    @Test
+    fun getActiveSession_returnsNull_whenNoRowHasAnActiveSession() = runTest {
+        dao.upsert(
+            DailyProgress(
+                date = "2026-07-05",
+                targetSeconds = 900,
+                remainingSeconds = 900,
+                completed = false,
+                completedAt = null,
+                activeSessionStartedAt = null,
+            )
+        )
+
+        assertNull(dao.getActiveSession())
+    }
+
+    @Test
+    fun getActiveSession_returnsTheRowWithNonNullActiveSessionStartedAt() = runTest {
+        dao.upsert(
+            DailyProgress(
+                date = "2026-07-03",
+                targetSeconds = 900,
+                remainingSeconds = 900,
+                completed = false,
+                completedAt = null,
+                activeSessionStartedAt = null,
+            )
+        )
+        dao.upsert(
+            DailyProgress(
+                date = "2026-07-04",
+                targetSeconds = 900,
+                remainingSeconds = 400,
+                completed = false,
+                completedAt = null,
+                activeSessionStartedAt = 12345L,
+            )
+        )
+
+        val result = dao.getActiveSession()
+
+        assertEquals("2026-07-04", result?.date)
+    }
+
+    @Test
+    fun getCompletedDates_returnsOnlyDatesMarkedCompleted() = runTest {
+        dao.upsert(
+            DailyProgress(
+                date = "2026-07-04",
+                targetSeconds = 900,
+                remainingSeconds = 0,
+                completed = true,
+                completedAt = 1000L,
+                activeSessionStartedAt = null,
+            )
+        )
+        dao.upsert(
+            DailyProgress(
+                date = "2026-07-05",
+                targetSeconds = 900,
+                remainingSeconds = 400,
+                completed = false,
+                completedAt = null,
+                activeSessionStartedAt = null,
+            )
+        )
+
+        assertEquals(listOf("2026-07-04"), dao.getCompletedDates())
+    }
 }

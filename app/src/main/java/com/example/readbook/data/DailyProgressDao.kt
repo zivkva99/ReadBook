@@ -14,4 +14,10 @@ interface DailyProgressDao {
 
     @Query("DELETE FROM daily_progress WHERE date = :date")
     suspend fun deleteByDate(date: String)
+
+    @Query("SELECT * FROM daily_progress WHERE activeSessionStartedAt IS NOT NULL LIMIT 1")
+    suspend fun getActiveSession(): DailyProgress?
+
+    @Query("SELECT date FROM daily_progress WHERE completed = 1")
+    suspend fun getCompletedDates(): List<String>
 }
