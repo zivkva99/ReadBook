@@ -3,11 +3,15 @@ package com.example.readbook.data
 import androidx.room.Dao
 import androidx.room.Query
 import androidx.room.Upsert
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface DailyProgressDao {
     @Query("SELECT * FROM daily_progress WHERE date = :date")
     suspend fun getByDate(date: String): DailyProgress?
+
+    @Query("SELECT * FROM daily_progress WHERE date = :date")
+    fun observeByDate(date: String): Flow<DailyProgress?>
 
     @Upsert
     suspend fun upsert(progress: DailyProgress)

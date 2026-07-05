@@ -90,11 +90,22 @@ class ReadingTimerServiceTest {
         // `.lastForegroundNotification` resolved incorrectly here even when the shadow's own
         // field was demonstrably set (confirmed via debug prints); `.getLastForegroundNotification()`
         // reads correctly. Suspect a Kotlin/Robolectric interop quirk with this shadow class.
+        //
+        // Read the notification CONTENT via ShadowNotificationManager, not ShadowService —
+        // ShadowService.getLastForegroundNotification() only reflects the original
+        // startForeground() call; it does NOT see later plain NotificationManager.notify()
+        // updates to the same ID (which is how the periodic remaining-time updates work).
         val shadowService = shadowOf(service)
         assertTrue(!shadowService.isForegroundStopped())
-        val notification = shadowService.getLastForegroundNotification()
+        assertNotNull(shadowService.getLastForegroundNotification())
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val notification = shadowOf(manager).getNotification(ReadingTimerService.NOTIFICATION_ID_TIMER)
         assertNotNull(notification)
         assertEquals(TimerNotifications.CHANNEL_TIMER, notification.channelId)
+        assertEquals(
+            "15 min left",
+            notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString(),
+        )
 
         val row = db.dailyProgressDao().getByDate("2026-07-05")
         assertNotNull(row)
@@ -126,6 +137,34 @@ class ReadingTimerServiceTest {
 
         val row = db.dailyProgressDao().getByDate("2026-07-05")
         assertEquals(null, row?.activeSessionStartedAt)
+
+        db.close()
+    }
+
+    @Test
+    fun runningSession_updatesTheNotificationPeriodically_reflectingElapsedTime() = runTest {
+        val clock = FakeClock(millis = 1_000_000L)
+        val db = buildTestDb()
+        val controller = Robolectric.buildService(ReadingTimerService::class.java).create()
+        val service = controller.get()
+        service.repository = db.repository(clock)
+        service.scope = CoroutineScope(StandardTestDispatcher(testScheduler))
+        service.today = { LocalDate.of(2026, 7, 5) }
+
+        controller.withIntent(Intent(ReadingTimerService.ACTION_START)).startCommand(0, 1)
+        testScheduler.runCurrent()
+
+        // 5 minutes elapse while running — well past one notification-update interval.
+        val elapsedMs = 5 * 60 * 1000L
+        clock.millis += elapsedMs
+        testScheduler.advanceTimeBy(elapsedMs)
+
+        val manager = context.getSystemService(NotificationManager::class.java)
+        val notification = shadowOf(manager).getNotification(ReadingTimerService.NOTIFICATION_ID_TIMER)
+        assertEquals(
+            "10 min left",
+            notification?.extras?.getCharSequence(android.app.Notification.EXTRA_TEXT).toString(),
+        )
 
         db.close()
     }

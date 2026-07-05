@@ -3,6 +3,7 @@ package com.example.readbook.data
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -159,5 +160,28 @@ class DailyProgressDaoTest {
         )
 
         assertEquals(listOf("2026-07-04"), dao.getCompletedDates())
+    }
+
+    @Test
+    fun observeByDate_emitsNull_whenNoRowForThatDate() = runTest {
+        assertNull(dao.observeByDate("2026-07-05").first())
+    }
+
+    @Test
+    fun observeByDate_emitsLatestValue_afterUpsert() = runTest {
+        dao.upsert(
+            DailyProgress(
+                date = "2026-07-05",
+                targetSeconds = 900,
+                remainingSeconds = 900,
+                completed = false,
+                completedAt = null,
+                activeSessionStartedAt = null,
+            )
+        )
+
+        val emitted = dao.observeByDate("2026-07-05").first()
+
+        assertEquals(900, emitted?.remainingSeconds)
     }
 }

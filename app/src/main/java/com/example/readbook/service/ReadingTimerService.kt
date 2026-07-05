@@ -1,5 +1,6 @@
 package com.example.readbook.service
 
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -52,6 +53,9 @@ class ReadingTimerService : Service() {
     }
 
     private fun handleStart() {
+        // Placeholder — startForeground() must be called synchronously (before the suspending
+        // repository.start() below) to satisfy Android's foreground-service contract. Corrected
+        // via updateNotification() within milliseconds, once the real remaining time is known.
         startForeground(
             NOTIFICATION_ID_TIMER,
             TimerNotifications.buildTimerNotification(this, 0),
@@ -60,9 +64,21 @@ class ReadingTimerService : Service() {
         autoCompleteJob?.cancel()
         autoCompleteJob = scope.launch {
             val row = repository.start(today())
-            delay(row.remainingSeconds * 1000L)
+            updateNotification(row.remainingSeconds)
+            var remaining = row.remainingSeconds
+            while (remaining > 0) {
+                val step = minOf(NOTIFICATION_UPDATE_INTERVAL_SECONDS, remaining)
+                delay(step * 1000L)
+                remaining -= step
+                if (remaining > 0) updateNotification(remaining)
+            }
             finishAndStopService()
         }
+    }
+
+    private fun updateNotification(remainingSeconds: Int) {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID_TIMER, TimerNotifications.buildTimerNotification(this, remainingSeconds))
     }
 
     private fun handleStop() {
@@ -84,5 +100,6 @@ class ReadingTimerService : Service() {
         const val ACTION_START = "com.example.readbook.action.START_TIMER"
         const val ACTION_STOP = "com.example.readbook.action.STOP_TIMER"
         const val NOTIFICATION_ID_TIMER = 1
+        private const val NOTIFICATION_UPDATE_INTERVAL_SECONDS = 30
     }
 }

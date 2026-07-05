@@ -3,6 +3,7 @@ package com.example.readbook.data
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -56,5 +57,19 @@ class ReadingConfigDaoTest {
 
         assertEquals(0b1111111, result?.enabledDaysMask)
         assertEquals(600, result?.targetSeconds)
+    }
+
+    @Test
+    fun observeConfig_emitsNull_whenNothingSaved() = runTest {
+        assertNull(dao.observeConfig().first())
+    }
+
+    @Test
+    fun observeConfig_emitsLatestValue_afterUpsert() = runTest {
+        dao.upsert(ReadingConfig(enabledDaysMask = 0b0011111, targetSeconds = 900))
+
+        val emitted = dao.observeConfig().first()
+
+        assertEquals(900, emitted?.targetSeconds)
     }
 }
