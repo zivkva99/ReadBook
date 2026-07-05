@@ -37,9 +37,12 @@ class NudgeSchedulingCoordinatorTest {
 
     private val enabledDay = LocalDate.of(2026, 7, 5) // Sunday
 
+    // AlarmManager's shadow state has been observed leaking across test classes when the full
+    // suite runs (order-dependent, not reproducible in isolation) — clear the slate defensively.
     @Before
     fun setUp() {
         clock.millis = epochMillisAt(enabledDay, hour = 6)
+        shadowOf(alarmManager).getScheduledAlarms().forEach { it.operation?.let(alarmManager::cancel) }
     }
 
     @After

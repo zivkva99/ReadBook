@@ -14,6 +14,7 @@ import com.example.readbook.data.ReadingConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -34,6 +35,13 @@ class BootReceiverTest {
 
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val alarmManager = context.getSystemService(AlarmManager::class.java)
+
+    // AlarmManager's shadow state has been observed leaking across test classes when the full
+    // suite runs (order-dependent, not reproducible in isolation) — clear the slate defensively.
+    @Before
+    fun clearAnyPreExistingAlarms() {
+        shadowOf(alarmManager).getScheduledAlarms().forEach { it.operation?.let(alarmManager::cancel) }
+    }
 
     private fun dispatch(receiver: BootReceiver, action: String) {
         context.registerReceiver(receiver, IntentFilter(action), Context.RECEIVER_NOT_EXPORTED)

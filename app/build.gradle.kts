@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
 }
 
@@ -38,6 +39,9 @@ android {
             isIncludeAndroidResources = true
         }
     }
+    buildFeatures {
+        compose = true
+    }
 }
 
 kotlin {
@@ -57,6 +61,15 @@ dependencies {
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
+
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui.tooling.preview)
+    implementation(libs.compose.material3)
+    implementation(libs.activity.compose)
+    implementation(libs.lifecycle.viewmodel.compose)
+    implementation(libs.lifecycle.runtime.compose)
+    debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)
     testImplementation(kotlin("test"))

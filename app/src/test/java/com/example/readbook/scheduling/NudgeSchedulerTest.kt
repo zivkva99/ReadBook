@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.readbook.data.DEFAULT_ENABLED_DAYS_MASK
 import com.example.readbook.data.DEFAULT_TARGET_SECONDS
 import com.example.readbook.data.ReadingConfig
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -32,6 +33,14 @@ class NudgeSchedulerTest {
     private val enabledDay = LocalDate.of(2026, 7, 5) // Sunday, enabled by default
     private val disabledDay = LocalDate.of(2026, 7, 10) // Friday, disabled by default
     private val config = ReadingConfig(enabledDaysMask = DEFAULT_ENABLED_DAYS_MASK, targetSeconds = DEFAULT_TARGET_SECONDS)
+
+    // AlarmManager's shadow state has been observed leaking across test classes when the full
+    // suite runs (order-dependent, not reproducible in isolation) — clear the slate defensively
+    // rather than assume a fresh AlarmManager per test.
+    @Before
+    fun clearAnyPreExistingAlarms() {
+        shadowOf(alarmManager).getScheduledAlarms().forEach { it.operation?.let(alarmManager::cancel) }
+    }
 
     @Test
     fun scheduleNudgesForToday_onAnEnabledDay_schedulesAllFiveFutureHours() {

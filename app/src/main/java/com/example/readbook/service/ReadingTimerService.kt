@@ -9,7 +9,9 @@ import com.example.readbook.data.ReadingTimerRepository
 import com.example.readbook.notifications.TimerNotifications
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
@@ -25,6 +27,12 @@ class ReadingTimerService : Service() {
     internal lateinit var repository: ReadingTimerRepository
     internal lateinit var scope: CoroutineScope
     internal var today: () -> LocalDate = { LocalDate.now() }
+
+    // Fires stop() automatically once the countdown naturally elapses, so completion (Stats
+    // update, cancelling today's nudges, the completion notification) doesn't depend on the
+    // user happening to press Stop right when time's up. Cancelled on manual Stop and replaced
+    // on every Start, so a stale job from a prior segment can never cut a later resume short.
+    private var autoCompleteJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -49,17 +57,27 @@ class ReadingTimerService : Service() {
             TimerNotifications.buildTimerNotification(this, 0),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
         )
-        scope.launch {
-            repository.start(today())
+        autoCompleteJob?.cancel()
+        autoCompleteJob = scope.launch {
+            val row = repository.start(today())
+            delay(row.remainingSeconds * 1000L)
+            finishAndStopService()
         }
     }
 
     private fun handleStop() {
+        autoCompleteJob?.cancel()
         scope.launch {
             repository.stop(today())
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
+    }
+
+    private suspend fun finishAndStopService() {
+        repository.stop(today())
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     companion object {
