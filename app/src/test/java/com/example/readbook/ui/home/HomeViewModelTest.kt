@@ -10,6 +10,7 @@ import com.example.readbook.data.DEFAULT_ENABLED_DAYS_MASK
 import com.example.readbook.data.DEFAULT_TARGET_SECONDS
 import com.example.readbook.data.DailyProgress
 import com.example.readbook.data.ReadingConfig
+import com.example.readbook.data.ReadingTimerRepository
 import com.example.readbook.service.ReadingTimerService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -47,9 +48,17 @@ class HomeViewModelTest {
         val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .setQueryCoroutineContext(StandardTestDispatcher(testScheduler))
             .build()
+        val repository = ReadingTimerRepository(
+            dailyProgressDao = db.dailyProgressDao(),
+            readingSessionDao = db.readingSessionDao(),
+            readingConfigDao = db.readingConfigDao(),
+            statsDao = db.statsDao(),
+            clock = clock,
+        )
         val viewModel = HomeViewModel(
             dailyProgressDao = db.dailyProgressDao(),
             readingConfigDao = db.readingConfigDao(),
+            repository = repository,
             clock = clock,
             today = { today },
         )
@@ -153,6 +162,28 @@ class HomeViewModelTest {
 
         val started = shadowOf(context as Application).getNextStartedService()
         assertEquals(ReadingTimerService.ACTION_START, started?.action)
+
+        db.close()
+    }
+
+    @Test
+    fun onResetToday_restoresFullDurationOnAPausedDay() = runTest {
+        val today = LocalDate.of(2026, 7, 5)
+        val (viewModel, db) = buildViewModel(FakeClock(millis = 1000L), today)
+        db.readingConfigDao().upsert(ReadingConfig(enabledDaysMask = DEFAULT_ENABLED_DAYS_MASK, targetSeconds = DEFAULT_TARGET_SECONDS))
+        db.dailyProgressDao().upsert(
+            DailyProgress(
+                date = today.toString(), targetSeconds = 900, remainingSeconds = 500,
+                completed = false, completedAt = null, activeSessionStartedAt = null,
+            )
+        )
+        testScheduler.runCurrent()
+
+        viewModel.onResetToday()
+        testScheduler.runCurrent()
+
+        val row = db.dailyProgressDao().getByDate(today.toString())
+        assertEquals(DEFAULT_TARGET_SECONDS, row?.remainingSeconds)
 
         db.close()
     }

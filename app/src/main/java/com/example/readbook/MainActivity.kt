@@ -45,7 +45,7 @@ class MainActivity : ComponentActivity() {
         val container = (application as ReadingApp).container
         homeViewModel = ViewModelProvider(
             this,
-            HomeViewModelFactory(container.dailyProgressDao, container.readingConfigDao),
+            HomeViewModelFactory(container.dailyProgressDao, container.readingConfigDao, container.readingTimerRepository),
         )[HomeViewModel::class.java]
 
         val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
                             onToggleTimer = { homeViewModel.onToggleTimer(this) },
                             onOpenSettings = { screen = Screen.SETTINGS },
                             onOpenHistory = { screen = Screen.HISTORY },
+                            onResetToday = { homeViewModel.onResetToday() },
                         )
                     }
                     Screen.HISTORY -> {

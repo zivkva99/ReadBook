@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -34,6 +35,7 @@ fun HomeScreen(
     onToggleTimer: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenHistory: () -> Unit,
+    onResetToday: () -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -62,8 +64,8 @@ fun HomeScreen(
                 when (uiState) {
                     is HomeUiState.NotConfigured -> Text("Setting up…")
                     is HomeUiState.NonEnabledDay -> NonEnabledDayContent(onToggleTimer)
-                    is HomeUiState.Done -> Text("Nice — today's reading is done")
-                    is HomeUiState.InProgress -> InProgressContent(uiState, onToggleTimer)
+                    is HomeUiState.Done -> DoneContent(onResetToday)
+                    is HomeUiState.InProgress -> InProgressContent(uiState, onToggleTimer, onResetToday)
                 }
             }
         }
@@ -91,7 +93,19 @@ private fun NonEnabledDayContent(onToggleTimer: () -> Unit) {
 }
 
 @Composable
-private fun InProgressContent(state: HomeUiState.InProgress, onToggleTimer: () -> Unit) {
+private fun DoneContent(onResetToday: () -> Unit) {
+    Text("Nice — today's reading is done")
+    TextButton(onClick = onResetToday, modifier = Modifier.padding(top = 16.dp)) {
+        Text("Reset today")
+    }
+}
+
+@Composable
+private fun InProgressContent(
+    state: HomeUiState.InProgress,
+    onToggleTimer: () -> Unit,
+    onResetToday: () -> Unit,
+) {
     // Live 1Hz countdown while running — the ViewModel/DB only update on Start/Stop/Completion,
     // not every second, so the visual tick lives here and resets whenever the underlying state
     // (a new baseline remainingSeconds, or isRunning flipping) actually changes.
@@ -109,5 +123,10 @@ private fun InProgressContent(state: HomeUiState.InProgress, onToggleTimer: () -
     Text(String.format("%d:%02d", minutes, seconds), style = MaterialTheme.typography.displayMedium)
     Button(onClick = onToggleTimer, modifier = Modifier.padding(top = 16.dp)) {
         Text(if (state.isRunning) "Stop" else "Start")
+    }
+    if (!state.isRunning) {
+        TextButton(onClick = onResetToday, modifier = Modifier.padding(top = 8.dp)) {
+            Text("Reset today")
+        }
     }
 }

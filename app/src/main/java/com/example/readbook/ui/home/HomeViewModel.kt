@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.readbook.data.Clock
 import com.example.readbook.data.DailyProgressDao
 import com.example.readbook.data.ReadingConfigDao
+import com.example.readbook.data.ReadingTimerRepository
 import com.example.readbook.data.SystemClock
 import com.example.readbook.service.ReadingTimerService
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,11 +15,13 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 class HomeViewModel(
     dailyProgressDao: DailyProgressDao,
     readingConfigDao: ReadingConfigDao,
+    private val repository: ReadingTimerRepository,
     private val clock: Clock = SystemClock,
     private val today: () -> LocalDate = { LocalDate.now() },
 ) : ViewModel() {
@@ -55,5 +58,13 @@ class HomeViewModel(
             is HomeUiState.NotConfigured, is HomeUiState.Done -> return
         }
         context.startService(Intent(context, ReadingTimerService::class.java).setAction(action))
+    }
+
+    /** Only ever called from the UI when the timer is not running (see HomeScreen) — no service
+     * coordination needed, since by construction nothing is running to race with. */
+    fun onResetToday() {
+        viewModelScope.launch {
+            repository.resetToday(today())
+        }
     }
 }
