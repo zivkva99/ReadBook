@@ -16,3 +16,8 @@ private fun bitFor(day: DayOfWeek): Int = when (day) {
 
 fun isEnabledDay(date: LocalDate, enabledDaysMask: Int): Boolean =
     (enabledDaysMask and bitFor(date.dayOfWeek)) != 0
+
+fun daysToMask(days: Set<DayOfWeek>): Int = days.fold(0) { mask, day -> mask or bitFor(day) }
+
+fun maskToDays(enabledDaysMask: Int): Set<DayOfWeek> =
+    DayOfWeek.entries.filterTo(mutableSetOf()) { (enabledDaysMask and bitFor(it)) != 0 }

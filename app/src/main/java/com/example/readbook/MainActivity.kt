@@ -7,44 +7,83 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.readbook.ui.home.HomeScreen
 import com.example.readbook.ui.home.HomeViewModel
 import com.example.readbook.ui.home.HomeViewModelFactory
+import com.example.readbook.ui.settings.SettingsScreen
+import com.example.readbook.ui.settings.SettingsViewModel
+import com.example.readbook.ui.settings.SettingsViewModelFactory
 import com.example.readbook.ui.theme.ReadBookTheme
+import kotlinx.coroutines.launch
+
+private enum class Screen { HOME, SETTINGS }
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var viewModel: HomeViewModel
+    private lateinit var homeViewModel: HomeViewModel
 
     private val requestNotificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        viewModel.setNotificationsDenied(!granted)
+        homeViewModel.setNotificationsDenied(!granted)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val container = (application as ReadingApp).container
-        viewModel = ViewModelProvider(
+        homeViewModel = ViewModelProvider(
             this,
             HomeViewModelFactory(container.dailyProgressDao, container.readingConfigDao),
         )[HomeViewModel::class.java]
 
         val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
-        viewModel.setNotificationsDenied(!granted)
+        homeViewModel.setNotificationsDenied(!granted)
         if (!granted) {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
         setContent {
             ReadBookTheme {
-                val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-                HomeScreen(uiState = uiState, onToggleTimer = { viewModel.onToggleTimer(this) })
+                var screen by remember { mutableStateOf(Screen.HOME) }
+
+                when (screen) {
+                    Screen.HOME -> {
+                        val uiState by homeViewModel.uiState.collectAsStateWithLifecycle()
+                        HomeScreen(
+                            uiState = uiState,
+                            onToggleTimer = { homeViewModel.onToggleTimer(this) },
+                            onOpenSettings = { screen = Screen.SETTINGS },
+                        )
+                    }
+                    Screen.SETTINGS -> {
+                        val settingsViewModel: SettingsViewModel = viewModel(
+                            factory = SettingsViewModelFactory(container.readingConfigDao, container.nudgeScheduler),
+                        )
+                        val settingsState by settingsViewModel.uiState.collectAsStateWithLifecycle()
+                        val scope = rememberCoroutineScope()
+                        SettingsScreen(
+                            uiState = settingsState,
+                            onDayToggled = settingsViewModel::onDayToggled,
+                            onDurationTextChanged = settingsViewModel::onDurationTextChanged,
+                            onSave = {
+                                scope.launch {
+                                    if (settingsViewModel.onSave()) screen = Screen.HOME
+                                }
+                            },
+                            onBack = { screen = Screen.HOME },
+                        )
+                    }
+                }
             }
         }
     }
