@@ -4,7 +4,7 @@
 
 **Goal:** Add a Reset-today button, "Start"/"Snooze 15m" notification actions on the hourly nudge, and a weekly summary notification to the existing ReadBook Android app.
 
-**Architecture:** Every feature slots into the app's existing layered structure — pure functions in `data`, DAO/repository logic in `data`, `AlarmManager`/`BroadcastReceiver` orchestration in `scheduling`, notification building in `notifications`, and Compose screens in `ui`. No new architectural patterns; each task follows a pattern already proven elsewhere in this codebase (cited per task).
+**Architecture:** Every feature slots into the app's existing layered structure — pure functions in `data`, DAO/repository logic in `data`, `AlarmManager`/`BroadcastReceiver` orchestration in `scheduling`, notification building in `notifications`, and Compose screens in `ui`. No new architectural patterns; each task follows a pattern already proven elsewhere in this codebase (cited per task). Where a file is touched by more than one task (`NudgeScheduler.kt`, `TimerNotifications.kt`), each task applies a targeted edit scoped to only its own feature — never a full-file rewrite that bundles another task's untested code — so every task's tests fully cover everything that task adds.
 
 **Tech Stack:** Kotlin, Jetpack Compose, Room, AlarmManager, Robolectric + JUnit (Robolectric for anything touching Android framework classes — Context, AlarmManager, NotificationManager, BroadcastReceiver, Room; plain `kotlin.test` for pure functions).
 
@@ -16,7 +16,7 @@
 - Every test class that touches `AlarmManager` needs the `@Before` cleanup: `shadowOf(alarmManager).getScheduledAlarms().forEach { it.operation?.let(alarmManager::cancel) }` — shadow state has been observed leaking across test classes in the full suite run.
 - `BroadcastReceiver` tests must dispatch via `context.registerReceiver(...)` + `context.sendBroadcast(...)` + `shadowOf(Looper.getMainLooper()).idle()` — never call `.onReceive()` directly (leaves `goAsync()`'s `PendingResult` null → NPE on `.finish()`).
 - All Robolectric test classes use `@RunWith(RobolectricTestRunner::class)` and `@Config(sdk = [35])`.
-- TDD throughout: write the failing test, run it, confirm it fails for the right reason, then write minimal code to pass.
+- TDD throughout: write the failing test, run it, confirm it fails for the right reason, then write minimal code to pass. Every task's production code must be covered by a test written earlier in that same task — never bundle another task's untested code into a "while I'm in this file" rewrite.
 - Commit after each task with `git add <specific files>` (never `-A`/`.`) — this repo has a `.claude/` directory that must never be committed.
 - Run `cd "D:/Users/zivk/Documents/GitHub/ReadBook" &&` before every Gradle/adb command (Bash tool, not PowerShell, for this repo's established workflow in this session).
 
@@ -369,7 +369,7 @@ class HomeViewModel(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes (still expected to fail — factory/screen not wired yet)**
+- [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.ui.home.HomeViewModelTest" --rerun-tasks 2>&1 | tail -40`
 
@@ -570,7 +570,7 @@ And change the `HomeScreen(...)` call inside `Screen.HOME` branch:
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest assembleDebug --rerun-tasks 2>&1 | tail -50`
 
-Expected: `BUILD SUCCESSFUL`, all tests pass (should be 111 + 1 new = 112 test methods across the whole suite — check with the per-file XML count command below if unsure).
+Expected: `BUILD SUCCESSFUL`, all tests pass.
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && total=0; failed=0; for f in app/build/test-results/testDebugUnitTest/*.xml; do t=$(grep -oE 'tests="[0-9]+"' "$f" | grep -oE '[0-9]+'); fl=$(grep -oE 'failures="[0-9]+"' "$f" | grep -oE '[0-9]+'); total=$((total+t)); failed=$((failed+fl)); done; echo "TOTAL=$total FAILED=$failed"`
 
@@ -609,14 +609,14 @@ EOF
 ## Task 3: `NudgeScheduler.scheduleSnooze()` and the `NudgeReceiver` snooze branch
 
 **Files:**
-- Modify: `app/src/main/java/com/example/readbook/scheduling/NudgeScheduler.kt`
+- Modify: `app/src/main/java/com/example/readbook/scheduling/NudgeScheduler.kt` (targeted edit — only adds snooze-related code; the weekly-summary alarm is a separate, later task's edit to this same file)
 - Modify: `app/src/main/java/com/example/readbook/scheduling/NudgeReceiver.kt`
 - Test: `app/src/test/java/com/example/readbook/scheduling/NudgeSchedulerTest.kt`
 - Test: `app/src/test/java/com/example/readbook/scheduling/NudgeReceiverTest.kt`
 
 **Interfaces:**
 - Consumes: existing `NudgeScheduler.ACTION_NUDGE`, `NudgeReceiver` class reference, `WINDOW_LENGTH_MS` (existing constant).
-- Produces: `NudgeScheduler.scheduleSnooze(): Unit` and `NudgeScheduler.SNOOZE_REQUEST_CODE`/`SNOOZE_DELAY_MS` constants (used by Task 4's notification action and consumed internally). `NudgeReceiver.EXTRA_SNOOZE: String` constant and a new `nudgeSchedulerOverride` test seam field (used by Task 4's notification-action `Intent`, and this task's own test).
+- Produces: `NudgeScheduler.scheduleSnooze(): Unit` and `NudgeScheduler.SNOOZE_REQUEST_CODE`/`SNOOZE_DELAY_MS` constants (used by Task 4's notification action). `NudgeReceiver.EXTRA_SNOOZE: String` constant and a new `nudgeSchedulerOverride` test seam field (used by Task 4's notification-action `Intent`, and this task's own test).
 
 - [ ] **Step 1: Write the failing test for `scheduleSnooze()`**
 
@@ -643,53 +643,21 @@ Expected: compile error — `Unresolved reference 'scheduleSnooze'`.
 
 - [ ] **Step 3: Implement `scheduleSnooze()`**
 
-Replace the full content of `app/src/main/java/com/example/readbook/scheduling/NudgeScheduler.kt`:
+In `app/src/main/java/com/example/readbook/scheduling/NudgeScheduler.kt`, find this exact block:
 
 ```kotlin
-package com.example.readbook.scheduling
-
-import android.app.AlarmManager
-import android.app.PendingIntent
-import android.content.Context
-import android.content.Intent
-import com.example.readbook.data.Clock
-import com.example.readbook.data.ReadingConfig
-import com.example.readbook.data.SystemClock
-import com.example.readbook.data.isEnabledDay
-import java.time.DayOfWeek
-import java.time.LocalDate
-import java.time.LocalTime
-import java.time.ZoneId
-
-/**
- * Wraps AlarmManager for the kinds of alarms this app needs. Always inexact
- * (setWindow, never setExactAndAllowWhileIdle) — a nudge firing a few minutes late costs
- * nothing, and exact alarms are denied by default on Android 14+, a permission fight this
- * feature doesn't need to have.
- */
-class NudgeScheduler(
-    private val context: Context,
-    private val clock: Clock = SystemClock,
-) {
-    private val alarmManager: AlarmManager
-        get() = context.getSystemService(AlarmManager::class.java)
-
-    /** Schedules only the nudge hours still in the future; a no-op on a non-enabled day. */
-    fun scheduleNudgesForToday(date: LocalDate, config: ReadingConfig) {
-        if (!isEnabledDay(date, config.enabledDaysMask)) return
-        for (hour in NUDGE_HOURS) {
-            val triggerAt = epochMillisAt(date, hour)
-            if (triggerAt <= clock.nowMillis()) continue
-            alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAt, WINDOW_LENGTH_MS, nudgePendingIntent(hour))
-        }
+    /** Schedules the daily rollover job for 00:01 the day after [from]. */
+    fun scheduleRollover(from: LocalDate) {
+        val nextMidnight = epochMillisAt(from.plusDays(1), hour = 0, minute = 1)
+        alarmManager.setWindow(AlarmManager.RTC_WAKEUP, nextMidnight, WINDOW_LENGTH_MS, rolloverPendingIntent())
     }
 
-    fun cancelNudgesForToday() {
-        for (hour in NUDGE_HOURS) {
-            alarmManager.cancel(nudgePendingIntent(hour))
-        }
-    }
+    private fun epochMillisAt(date: LocalDate, hour: Int, minute: Int = 0): Long =
+```
 
+Replace it with:
+
+```kotlin
     /** Schedules the daily rollover job for 00:01 the day after [from]. */
     fun scheduleRollover(from: LocalDate) {
         val nextMidnight = epochMillisAt(from.plusDays(1), hour = 0, minute = 1)
@@ -704,31 +672,32 @@ class NudgeScheduler(
         alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAt, WINDOW_LENGTH_MS, snoozePendingIntent())
     }
 
-    /** Schedules the weekly summary for the next Sunday 9:00 — [from] today if it's a Sunday
-     * and still before 9:00, otherwise the following Sunday. */
-    fun scheduleWeeklySummary(from: LocalDate) {
-        var candidate = from
-        while (candidate.dayOfWeek != DayOfWeek.SUNDAY) {
-            candidate = candidate.plusDays(1)
-        }
-        var triggerAt = epochMillisAt(candidate, hour = 9)
-        if (triggerAt <= clock.nowMillis()) {
-            candidate = candidate.plusDays(7)
-            triggerAt = epochMillisAt(candidate, hour = 9)
-        }
-        alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAt, WINDOW_LENGTH_MS, weeklySummaryPendingIntent())
-    }
-
     private fun epochMillisAt(date: LocalDate, hour: Int, minute: Int = 0): Long =
-        date.atTime(LocalTime.of(hour, minute)).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+```
 
-    private fun nudgePendingIntent(hour: Int): PendingIntent {
-        val intent = Intent(context, NudgeReceiver::class.java).setAction(ACTION_NUDGE)
+Then find this exact block:
+
+```kotlin
+    private fun rolloverPendingIntent(): PendingIntent {
+        val intent = Intent(context, RolloverReceiver::class.java).setAction(ACTION_ROLLOVER)
         return PendingIntent.getBroadcast(
-            context, hour, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            context, ROLLOVER_REQUEST_CODE, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
     }
 
+    companion object {
+        val NUDGE_HOURS = listOf(9, 10, 11, 12, 13)
+        const val WINDOW_LENGTH_MS = 15 * 60 * 1000L
+        const val ROLLOVER_REQUEST_CODE = 100
+        const val ACTION_NUDGE = "com.example.readbook.action.NUDGE"
+        const val ACTION_ROLLOVER = "com.example.readbook.action.ROLLOVER"
+    }
+}
+```
+
+Replace it with:
+
+```kotlin
     private fun rolloverPendingIntent(): PendingIntent {
         val intent = Intent(context, RolloverReceiver::class.java).setAction(ACTION_ROLLOVER)
         return PendingIntent.getBroadcast(
@@ -743,41 +712,15 @@ class NudgeScheduler(
         )
     }
 
-    private fun weeklySummaryPendingIntent(): PendingIntent {
-        val intent = Intent(context, WeeklySummaryReceiver::class.java).setAction(ACTION_WEEKLY_SUMMARY)
-        return PendingIntent.getBroadcast(
-            context, WEEKLY_SUMMARY_REQUEST_CODE, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-    }
-
     companion object {
         val NUDGE_HOURS = listOf(9, 10, 11, 12, 13)
         const val WINDOW_LENGTH_MS = 15 * 60 * 1000L
         const val ROLLOVER_REQUEST_CODE = 100
         const val SNOOZE_REQUEST_CODE = 200
         const val SNOOZE_DELAY_MS = 15 * 60 * 1000L
-        const val WEEKLY_SUMMARY_REQUEST_CODE = 400
         const val ACTION_NUDGE = "com.example.readbook.action.NUDGE"
         const val ACTION_ROLLOVER = "com.example.readbook.action.ROLLOVER"
-        const val ACTION_WEEKLY_SUMMARY = "com.example.readbook.action.WEEKLY_SUMMARY"
     }
-}
-```
-
-Note: this references `WeeklySummaryReceiver`, which doesn't exist until Task 7. That's fine — Kotlin compiles this file together with the rest of the module in one pass, and Task 7 creates that class before this file is ever compiled standalone by a test run. If you run only `NudgeSchedulerTest` right now (Step 4 below), the whole module still needs to compile, so **Task 7's `WeeklySummaryReceiver.kt` file must exist as a stub by then.** To keep this task's tests green in isolation, create a minimal stub now:
-
-Create `app/src/main/java/com/example/readbook/scheduling/WeeklySummaryReceiver.kt`:
-
-```kotlin
-package com.example.readbook.scheduling
-
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-
-// Full implementation added in a later task (weekly summary notification).
-class WeeklySummaryReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {}
 }
 ```
 
@@ -789,7 +732,7 @@ Expected: `BUILD SUCCESSFUL`, all tests (existing 5 + new 1 = 6) pass.
 
 - [ ] **Step 5: Write the failing test for the `NudgeReceiver` snooze branch**
 
-Open `app/src/test/java/com/example/readbook/scheduling/NudgeReceiverTest.kt`. Add these imports at the top, alongside the existing ones:
+Open `app/src/test/java/com/example/readbook/scheduling/NudgeReceiverTest.kt`. Add this import at the top, alongside the existing ones:
 
 ```kotlin
 import android.app.AlarmManager
@@ -828,6 +771,8 @@ Add this test at the end of the class, before the closing `}`:
         db.close()
     }
 ```
+
+Note: `buildNudgeNotification(context)` here builds the notification exactly as it exists at this point in the plan (no action buttons yet — those are added in Task 4). That's fine; this test only checks that the notification gets cancelled and an alarm gets scheduled, not what actions the notification carries.
 
 - [ ] **Step 6: Run test to verify it fails**
 
@@ -918,7 +863,6 @@ cd "D:/Users/zivk/Documents/GitHub/ReadBook"
 git add \
   app/src/main/java/com/example/readbook/scheduling/NudgeScheduler.kt \
   app/src/main/java/com/example/readbook/scheduling/NudgeReceiver.kt \
-  app/src/main/java/com/example/readbook/scheduling/WeeklySummaryReceiver.kt \
   app/src/test/java/com/example/readbook/scheduling/NudgeSchedulerTest.kt \
   app/src/test/java/com/example/readbook/scheduling/NudgeReceiverTest.kt
 git commit -m "$(cat <<'EOF'
@@ -928,10 +872,6 @@ Snooze reuses the ordinary ACTION_NUDGE path rather than duplicating the
 completion-check/notify logic in a new receiver: NudgeReceiver just
 detects the EXTRA_SNOOZE flag, cancels the current notification, and
 schedules one extra nudge-check 15 minutes out via its own request code.
-
-Also adds scheduleWeeklySummary() (used starting in a later task) and a
-placeholder WeeklySummaryReceiver stub so the module compiles — its real
-implementation lands in a follow-up task.
 EOF
 )"
 ```
@@ -941,7 +881,7 @@ EOF
 ## Task 4: Add "Start" and "Snooze 15m" actions to the nudge notification
 
 **Files:**
-- Modify: `app/src/main/java/com/example/readbook/notifications/TimerNotifications.kt`
+- Modify: `app/src/main/java/com/example/readbook/notifications/TimerNotifications.kt` (targeted edit — only adds the two notification actions; the weekly-summary channel/builder is a separate, later task's edit to this same file)
 - Test: `app/src/test/java/com/example/readbook/notifications/TimerNotificationsTest.kt`
 
 **Interfaces:**
@@ -973,11 +913,20 @@ Expected: `NullPointerException` — `notification.actions` is `null` (no action
 
 - [ ] **Step 3: Implement the actions**
 
-Replace the full content of `app/src/main/java/com/example/readbook/notifications/TimerNotifications.kt`:
+In `app/src/main/java/com/example/readbook/notifications/TimerNotifications.kt`, find this exact block (the imports):
 
 ```kotlin
-package com.example.readbook.notifications
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import androidx.core.app.NotificationCompat
+import com.example.readbook.R
+```
 
+Replace it with:
+
+```kotlin
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -986,42 +935,50 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import com.example.readbook.R
-import com.example.readbook.data.WeeklySummary
 import com.example.readbook.scheduling.NudgeReceiver
 import com.example.readbook.scheduling.NudgeScheduler
 import com.example.readbook.service.ReadingTimerService
+```
 
-/**
- * Four separate channels so the persistent timer notification, the hourly nudges, the
- * completion confirmation, and the weekly summary can each be muted independently.
- */
+Then find this exact block:
+
+```kotlin
 object TimerNotifications {
     const val CHANNEL_NUDGE = "nudge"
     const val CHANNEL_TIMER = "timer"
     const val CHANNEL_COMPLETION = "completion"
-    const val CHANNEL_WEEKLY_SUMMARY = "weekly_summary"
+
+    fun createChannels(context: Context) {
+```
+
+Replace it with:
+
+```kotlin
+object TimerNotifications {
+    const val CHANNEL_NUDGE = "nudge"
+    const val CHANNEL_TIMER = "timer"
+    const val CHANNEL_COMPLETION = "completion"
 
     private const val START_ACTION_REQUEST_CODE = 300
     private const val SNOOZE_ACTION_REQUEST_CODE = 301
 
     fun createChannels(context: Context) {
-        val manager = context.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_NUDGE, "Reading reminders", NotificationManager.IMPORTANCE_DEFAULT)
-        )
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_TIMER, "Reading timer", NotificationManager.IMPORTANCE_LOW).apply {
-                setSound(null, null)
-            }
-        )
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_COMPLETION, "Reading completed", NotificationManager.IMPORTANCE_DEFAULT)
-        )
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_WEEKLY_SUMMARY, "Weekly summary", NotificationManager.IMPORTANCE_DEFAULT)
-        )
-    }
+```
 
+Then find this exact block:
+
+```kotlin
+    fun buildNudgeNotification(context: Context): Notification =
+        NotificationCompat.Builder(context, CHANNEL_NUDGE)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentText("15 minutes today?")
+            .setAutoCancel(true)
+            .build()
+```
+
+Replace it with:
+
+```kotlin
     fun buildNudgeNotification(context: Context): Notification {
         val startIntent = Intent(context, ReadingTimerService::class.java).setAction(ReadingTimerService.ACTION_START)
         val startPendingIntent = PendingIntent.getForegroundService(
@@ -1045,41 +1002,6 @@ object TimerNotifications {
             .addAction(R.drawable.ic_launcher_foreground, "Snooze 15m", snoozePendingIntent)
             .build()
     }
-
-    fun buildTimerNotification(context: Context, remainingSeconds: Int): Notification {
-        val minutes = remainingSeconds / 60
-        return NotificationCompat.Builder(context, CHANNEL_TIMER)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentText("$minutes min left")
-            .setOngoing(true)
-            .build()
-    }
-
-    fun buildCompletionNotification(context: Context): Notification =
-        NotificationCompat.Builder(context, CHANNEL_COMPLETION)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentText("Nice — today's reading is done")
-            .setAutoCancel(true)
-            .build()
-
-    fun buildWeeklySummaryNotification(context: Context, summary: WeeklySummary): Notification =
-        NotificationCompat.Builder(context, CHANNEL_WEEKLY_SUMMARY)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentText("You read ${summary.completedCount}/${summary.enabledCount} days last week")
-            .setAutoCancel(true)
-            .build()
-}
-```
-
-Note: this references `com.example.readbook.data.WeeklySummary`, which doesn't exist until Task 5. Create a minimal stub now so the module compiles — Task 5 replaces this stub with the real pure function and its tests.
-
-Create `app/src/main/java/com/example/readbook/data/WeeklySummary.kt`:
-
-```kotlin
-package com.example.readbook.data
-
-// Real implementation (computeWeeklySummary) added in a later task.
-data class WeeklySummary(val completedCount: Int, val enabledCount: Int)
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1110,7 +1032,6 @@ Pull down the notification shade, confirm the nudge notification shows two actio
 cd "D:/Users/zivk/Documents/GitHub/ReadBook"
 git add \
   app/src/main/java/com/example/readbook/notifications/TimerNotifications.kt \
-  app/src/main/java/com/example/readbook/data/WeeklySummary.kt \
   app/src/test/java/com/example/readbook/notifications/TimerNotificationsTest.kt
 git commit -m "$(cat <<'EOF'
 Add Start/Snooze action buttons to the nudge notification
@@ -1119,9 +1040,6 @@ Start targets ReadingTimerService directly via getForegroundService —
 Android permits starting a foreground service this way because a
 notification-action tap is a direct user interaction. Snooze broadcasts
 to NudgeReceiver with EXTRA_SNOOZE, added in the prior task.
-
-Also adds a WeeklySummary stub (full implementation lands next task) so
-the module compiles with buildWeeklySummaryNotification's signature.
 EOF
 )"
 ```
@@ -1131,12 +1049,12 @@ EOF
 ## Task 5: `computeWeeklySummary` pure function
 
 **Files:**
-- Modify: `app/src/main/java/com/example/readbook/data/WeeklySummary.kt` (replacing Task 4's stub)
-- Test: `app/src/test/java/com/example/readbook/data/WeeklySummaryTest.kt` (new file)
+- Create: `app/src/main/java/com/example/readbook/data/WeeklySummary.kt`
+- Test: `app/src/test/java/com/example/readbook/data/WeeklySummaryTest.kt`
 
 **Interfaces:**
 - Consumes: `isEnabledDay(date: LocalDate, enabledDaysMask: Int): Boolean` (existing, `com.example.readbook.data.EnabledDays.kt`), `DEFAULT_ENABLED_DAYS_MASK` (existing).
-- Produces: `computeWeeklySummary(enabledDaysMask: Int, weekStart: LocalDate, completedDates: Set<LocalDate>): WeeklySummary` — used by Task 7's `WeeklySummaryReceiver`.
+- Produces: `data class WeeklySummary(val completedCount: Int, val enabledCount: Int)` and `computeWeeklySummary(enabledDaysMask: Int, weekStart: LocalDate, completedDates: Set<LocalDate>): WeeklySummary` — used by Task 6's notification builder and Task 7's `WeeklySummaryReceiver`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1222,7 +1140,7 @@ Expected: compile error — `Unresolved reference 'computeWeeklySummary'`.
 
 - [ ] **Step 3: Implement `computeWeeklySummary`**
 
-Replace the full content of `app/src/main/java/com/example/readbook/data/WeeklySummary.kt`:
+Create `app/src/main/java/com/example/readbook/data/WeeklySummary.kt`:
 
 ```kotlin
 package com.example.readbook.data
@@ -1274,26 +1192,26 @@ git commit -m "$(cat <<'EOF'
 Implement computeWeeklySummary pure function
 
 Walks the 7-day window and counts enabled-vs-completed using the same
-isEnabledDay used everywhere else. Replaces the stub from the notification
-actions task.
+isEnabledDay used everywhere else.
 EOF
 )"
 ```
 
 ---
 
-## Task 6: Weekly summary notification channel and builder — test coverage
+## Task 6: Weekly summary notification channel and builder
 
 **Files:**
-- Modify: `app/src/test/java/com/example/readbook/notifications/TimerNotificationsTest.kt`
+- Modify: `app/src/main/java/com/example/readbook/notifications/TimerNotifications.kt` (targeted edit — adds only the weekly-summary channel/builder on top of Task 4's Start/Snooze actions)
+- Test: `app/src/test/java/com/example/readbook/notifications/TimerNotificationsTest.kt`
 
 **Interfaces:**
-- Consumes: `TimerNotifications.CHANNEL_WEEKLY_SUMMARY`, `TimerNotifications.buildWeeklySummaryNotification(context, summary)` (both already implemented in Task 4, since `buildNudgeNotification`'s changes were bundled with the whole file replacement — this task adds the tests that were deferred until `WeeklySummary` had its real implementation).
-- Produces: nothing new — this task is test-only, confirming Task 4's channel/builder work correctly now that Task 5 has replaced the stub.
+- Consumes: `WeeklySummary` data class (Task 5).
+- Produces: `TimerNotifications.CHANNEL_WEEKLY_SUMMARY: String` and `TimerNotifications.buildWeeklySummaryNotification(context, summary): Notification` — used by Task 7's `WeeklySummaryReceiver`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Open `app/src/test/java/com/example/readbook/notifications/TimerNotificationsTest.kt`. Add the import:
+Open `app/src/test/java/com/example/readbook/notifications/TimerNotificationsTest.kt`. Add this import:
 
 ```kotlin
 import com.example.readbook.data.WeeklySummary
@@ -1324,39 +1242,369 @@ Add these two tests at the end of the class, before the closing `}`:
     }
 ```
 
-- [ ] **Step 2: Run test — this should already pass**
+- [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.notifications.TimerNotificationsTest" --rerun-tasks 2>&1 | tail -40`
 
-Expected: `BUILD SUCCESSFUL`, all tests (existing 7 + new 2 = 9) pass immediately, since the implementation already exists from Task 4. **This is expected and fine** — Task 4 had to implement the channel/builder together with the notification actions to keep that file in one coherent edit, and this task is purely closing the test-coverage gap that was deliberately deferred (writing these specific assertions before `WeeklySummary` had a real `computeWeeklySummary` behind it would have been testing against a meaningless stub). If you want to see these two tests fail-then-pass for genuine red/green proof, temporarily comment out the two channel/builder-related lines in `TimerNotifications.kt`, confirm the two new tests fail, then restore them.
+Expected: compile error — `Unresolved reference 'CHANNEL_WEEKLY_SUMMARY'` and `'buildWeeklySummaryNotification'`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Implement the channel and builder**
+
+In `app/src/main/java/com/example/readbook/notifications/TimerNotifications.kt`, find this exact block (the imports, as left by Task 4):
+
+```kotlin
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import androidx.core.app.NotificationCompat
+import com.example.readbook.R
+import com.example.readbook.scheduling.NudgeReceiver
+import com.example.readbook.scheduling.NudgeScheduler
+import com.example.readbook.service.ReadingTimerService
+```
+
+Replace it with:
+
+```kotlin
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import androidx.core.app.NotificationCompat
+import com.example.readbook.R
+import com.example.readbook.data.WeeklySummary
+import com.example.readbook.scheduling.NudgeReceiver
+import com.example.readbook.scheduling.NudgeScheduler
+import com.example.readbook.service.ReadingTimerService
+```
+
+Then find this exact block:
+
+```kotlin
+    const val CHANNEL_NUDGE = "nudge"
+    const val CHANNEL_TIMER = "timer"
+    const val CHANNEL_COMPLETION = "completion"
+
+    private const val START_ACTION_REQUEST_CODE = 300
+    private const val SNOOZE_ACTION_REQUEST_CODE = 301
+
+    fun createChannels(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_NUDGE, "Reading reminders", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_TIMER, "Reading timer", NotificationManager.IMPORTANCE_LOW).apply {
+                setSound(null, null)
+            }
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_COMPLETION, "Reading completed", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+    }
+```
+
+Replace it with:
+
+```kotlin
+    const val CHANNEL_NUDGE = "nudge"
+    const val CHANNEL_TIMER = "timer"
+    const val CHANNEL_COMPLETION = "completion"
+    const val CHANNEL_WEEKLY_SUMMARY = "weekly_summary"
+
+    private const val START_ACTION_REQUEST_CODE = 300
+    private const val SNOOZE_ACTION_REQUEST_CODE = 301
+
+    fun createChannels(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_NUDGE, "Reading reminders", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_TIMER, "Reading timer", NotificationManager.IMPORTANCE_LOW).apply {
+                setSound(null, null)
+            }
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_COMPLETION, "Reading completed", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_WEEKLY_SUMMARY, "Weekly summary", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+    }
+```
+
+Finally, find this exact block (the end of the file):
+
+```kotlin
+    fun buildCompletionNotification(context: Context): Notification =
+        NotificationCompat.Builder(context, CHANNEL_COMPLETION)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentText("Nice — today's reading is done")
+            .setAutoCancel(true)
+            .build()
+}
+```
+
+Replace it with:
+
+```kotlin
+    fun buildCompletionNotification(context: Context): Notification =
+        NotificationCompat.Builder(context, CHANNEL_COMPLETION)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentText("Nice — today's reading is done")
+            .setAutoCancel(true)
+            .build()
+
+    fun buildWeeklySummaryNotification(context: Context, summary: WeeklySummary): Notification =
+        NotificationCompat.Builder(context, CHANNEL_WEEKLY_SUMMARY)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentText("You read ${summary.completedCount}/${summary.enabledCount} days last week")
+            .setAutoCancel(true)
+            .build()
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.notifications.TimerNotificationsTest" --rerun-tasks 2>&1 | tail -40`
+
+Expected: `BUILD SUCCESSFUL`, all tests (existing 7 + new 2 = 9) pass.
+
+- [ ] **Step 5: Run the full test suite**
+
+Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --rerun-tasks 2>&1 | tail -30`
+
+Expected: `BUILD SUCCESSFUL`.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 cd "D:/Users/zivk/Documents/GitHub/ReadBook"
-git add app/src/test/java/com/example/readbook/notifications/TimerNotificationsTest.kt
+git add app/src/main/java/com/example/readbook/notifications/TimerNotifications.kt app/src/test/java/com/example/readbook/notifications/TimerNotificationsTest.kt
 git commit -m "$(cat <<'EOF'
-Add test coverage for the weekly summary notification channel/builder
+Add weekly summary notification channel and builder
 
-Closes the coverage gap deliberately left open in the notification-actions
-task, now that WeeklySummary has a real implementation behind it.
+New CHANNEL_WEEKLY_SUMMARY so it can be muted independently of daily
+nudges. buildWeeklySummaryNotification renders "You read X/Y days last
+week" from a WeeklySummary.
 EOF
 )"
 ```
 
 ---
 
-## Task 7: `WeeklySummaryReceiver` — real implementation
+## Task 7: `NudgeScheduler.scheduleWeeklySummary()` and `WeeklySummaryReceiver`
 
 **Files:**
-- Modify: `app/src/main/java/com/example/readbook/scheduling/WeeklySummaryReceiver.kt` (replacing Task 3's stub)
-- Test: `app/src/test/java/com/example/readbook/scheduling/WeeklySummaryReceiverTest.kt` (new file)
+- Modify: `app/src/main/java/com/example/readbook/scheduling/NudgeScheduler.kt` (targeted edit — adds the weekly-summary alarm on top of Task 3's snooze alarm)
+- Create: `app/src/main/java/com/example/readbook/scheduling/WeeklySummaryReceiver.kt`
+- Test: `app/src/test/java/com/example/readbook/scheduling/NudgeSchedulerTest.kt`
+- Test: `app/src/test/java/com/example/readbook/scheduling/WeeklySummaryReceiverTest.kt`
 
 **Interfaces:**
-- Consumes: `NudgeScheduler.scheduleWeeklySummary(from: LocalDate)` and `NudgeScheduler.ACTION_WEEKLY_SUMMARY` (Task 3), `computeWeeklySummary` (Task 5), `TimerNotifications.buildWeeklySummaryNotification`/`createChannels` (Task 4), `DailyProgressDao.getCompletedDates(): List<String>` (existing), `ReadingConfigDao.getConfig(): ReadingConfig?` (existing), `AppContainer.dailyProgressDao`/`readingConfigDao`/`nudgeScheduler` (existing).
-- Produces: `WeeklySummaryReceiver.NOTIFICATION_ID_WEEKLY_SUMMARY` constant and test seams (`today`, `dailyProgressDaoOverride`, `readingConfigDaoOverride`, `schedulerOverride`, `scopeOverride`) — used by Task 8's manifest wiring (no code dependency, just needs the class to exist and be registered).
+- Consumes: `computeWeeklySummary` (Task 5), `TimerNotifications.buildWeeklySummaryNotification`/`createChannels` (Task 6), `DailyProgressDao.getCompletedDates(): List<String>` (existing), `ReadingConfigDao.getConfig(): ReadingConfig?` (existing), `AppContainer.dailyProgressDao`/`readingConfigDao`/`nudgeScheduler` (existing).
+- Produces: `NudgeScheduler.scheduleWeeklySummary(from: LocalDate): Unit`, `NudgeScheduler.ACTION_WEEKLY_SUMMARY`/`WEEKLY_SUMMARY_REQUEST_CODE` constants, `WeeklySummaryReceiver.NOTIFICATION_ID_WEEKLY_SUMMARY` constant and test seams (`today`, `dailyProgressDaoOverride`, `readingConfigDaoOverride`, `schedulerOverride`, `scopeOverride`) — used by Task 8's manifest/self-heal wiring (no code dependency, just needs the class to exist and be registered).
 
-- [ ] **Step 1: Write the failing tests**
+Note on sequencing within this task: `NudgeScheduler.scheduleWeeklySummary` references `WeeklySummaryReceiver::class.java` as a `PendingIntent` target, so it cannot compile until that class exists. Step 3 below creates `WeeklySummaryReceiver` as an empty shell (no behavior — nothing to test yet) purely so the scheduler code compiles; the receiver's actual logic is then driven out by its own failing tests in Steps 5-7, same as every other piece of production code in this plan.
+
+- [ ] **Step 1: Write the failing tests for `scheduleWeeklySummary`**
+
+Open `app/src/test/java/com/example/readbook/scheduling/NudgeSchedulerTest.kt` and add these three tests at the end of the class, before the closing `}`:
+
+```kotlin
+    @Test
+    fun scheduleWeeklySummary_fromASundayBeforeNine_schedulesTodayAtNine() {
+        val sunday = LocalDate.of(2026, 7, 5)
+        clock.millis = epochMillisAt(sunday, hour = 7)
+
+        scheduler.scheduleWeeklySummary(from = sunday)
+
+        val alarms = shadowOf(alarmManager).getScheduledAlarms()
+        assertEquals(1, alarms.size)
+        assertEquals(epochMillisAt(sunday, hour = 9), alarms[0].triggerAtTime)
+    }
+
+    @Test
+    fun scheduleWeeklySummary_fromASundayAfterNine_schedulesNextSunday() {
+        val sunday = LocalDate.of(2026, 7, 5)
+        clock.millis = epochMillisAt(sunday, hour = 10)
+
+        scheduler.scheduleWeeklySummary(from = sunday)
+
+        val alarms = shadowOf(alarmManager).getScheduledAlarms()
+        assertEquals(epochMillisAt(sunday.plusDays(7), hour = 9), alarms[0].triggerAtTime)
+    }
+
+    @Test
+    fun scheduleWeeklySummary_fromAMidWeekDay_schedulesTheUpcomingSunday() {
+        val wednesday = LocalDate.of(2026, 7, 8)
+        clock.millis = epochMillisAt(wednesday, hour = 6)
+
+        scheduler.scheduleWeeklySummary(from = wednesday)
+
+        val alarms = shadowOf(alarmManager).getScheduledAlarms()
+        assertEquals(epochMillisAt(LocalDate.of(2026, 7, 12), hour = 9), alarms[0].triggerAtTime)
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.scheduling.NudgeSchedulerTest" --rerun-tasks 2>&1 | tail -40`
+
+Expected: compile error — `Unresolved reference 'scheduleWeeklySummary'`.
+
+- [ ] **Step 3: Create the `WeeklySummaryReceiver` shell, then implement `scheduleWeeklySummary`**
+
+Create `app/src/main/java/com/example/readbook/scheduling/WeeklySummaryReceiver.kt` as an empty shell (its real behavior is added in Step 6):
+
+```kotlin
+package com.example.readbook.scheduling
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+
+class WeeklySummaryReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {}
+}
+```
+
+In `app/src/main/java/com/example/readbook/scheduling/NudgeScheduler.kt`, find this exact block (the imports, as left by Task 3):
+
+```kotlin
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import com.example.readbook.data.Clock
+import com.example.readbook.data.ReadingConfig
+import com.example.readbook.data.SystemClock
+import com.example.readbook.data.isEnabledDay
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
+```
+
+Replace it with:
+
+```kotlin
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import com.example.readbook.data.Clock
+import com.example.readbook.data.ReadingConfig
+import com.example.readbook.data.SystemClock
+import com.example.readbook.data.isEnabledDay
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
+```
+
+Then find this exact block (as left by Task 3):
+
+```kotlin
+    fun scheduleSnooze() {
+        val triggerAt = clock.nowMillis() + SNOOZE_DELAY_MS
+        alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAt, WINDOW_LENGTH_MS, snoozePendingIntent())
+    }
+
+    private fun epochMillisAt(date: LocalDate, hour: Int, minute: Int = 0): Long =
+```
+
+Replace it with:
+
+```kotlin
+    fun scheduleSnooze() {
+        val triggerAt = clock.nowMillis() + SNOOZE_DELAY_MS
+        alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAt, WINDOW_LENGTH_MS, snoozePendingIntent())
+    }
+
+    /** Schedules the weekly summary for the next Sunday 9:00 — [from] today if it's a Sunday
+     * and still before 9:00, otherwise the following Sunday. */
+    fun scheduleWeeklySummary(from: LocalDate) {
+        var candidate = from
+        while (candidate.dayOfWeek != DayOfWeek.SUNDAY) {
+            candidate = candidate.plusDays(1)
+        }
+        var triggerAt = epochMillisAt(candidate, hour = 9)
+        if (triggerAt <= clock.nowMillis()) {
+            candidate = candidate.plusDays(7)
+            triggerAt = epochMillisAt(candidate, hour = 9)
+        }
+        alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAt, WINDOW_LENGTH_MS, weeklySummaryPendingIntent())
+    }
+
+    private fun epochMillisAt(date: LocalDate, hour: Int, minute: Int = 0): Long =
+```
+
+Then find this exact block (as left by Task 3):
+
+```kotlin
+    private fun snoozePendingIntent(): PendingIntent {
+        val intent = Intent(context, NudgeReceiver::class.java).setAction(ACTION_NUDGE)
+        return PendingIntent.getBroadcast(
+            context, SNOOZE_REQUEST_CODE, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    companion object {
+        val NUDGE_HOURS = listOf(9, 10, 11, 12, 13)
+        const val WINDOW_LENGTH_MS = 15 * 60 * 1000L
+        const val ROLLOVER_REQUEST_CODE = 100
+        const val SNOOZE_REQUEST_CODE = 200
+        const val SNOOZE_DELAY_MS = 15 * 60 * 1000L
+        const val ACTION_NUDGE = "com.example.readbook.action.NUDGE"
+        const val ACTION_ROLLOVER = "com.example.readbook.action.ROLLOVER"
+    }
+}
+```
+
+Replace it with:
+
+```kotlin
+    private fun snoozePendingIntent(): PendingIntent {
+        val intent = Intent(context, NudgeReceiver::class.java).setAction(ACTION_NUDGE)
+        return PendingIntent.getBroadcast(
+            context, SNOOZE_REQUEST_CODE, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun weeklySummaryPendingIntent(): PendingIntent {
+        val intent = Intent(context, WeeklySummaryReceiver::class.java).setAction(ACTION_WEEKLY_SUMMARY)
+        return PendingIntent.getBroadcast(
+            context, WEEKLY_SUMMARY_REQUEST_CODE, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    companion object {
+        val NUDGE_HOURS = listOf(9, 10, 11, 12, 13)
+        const val WINDOW_LENGTH_MS = 15 * 60 * 1000L
+        const val ROLLOVER_REQUEST_CODE = 100
+        const val SNOOZE_REQUEST_CODE = 200
+        const val SNOOZE_DELAY_MS = 15 * 60 * 1000L
+        const val WEEKLY_SUMMARY_REQUEST_CODE = 400
+        const val ACTION_NUDGE = "com.example.readbook.action.NUDGE"
+        const val ACTION_ROLLOVER = "com.example.readbook.action.ROLLOVER"
+        const val ACTION_WEEKLY_SUMMARY = "com.example.readbook.action.WEEKLY_SUMMARY"
+    }
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.scheduling.NudgeSchedulerTest" --rerun-tasks 2>&1 | tail -40`
+
+Expected: `BUILD SUCCESSFUL`, all tests (existing 6 + new 3 = 9) pass.
+
+- [ ] **Step 5: Write the failing tests for `WeeklySummaryReceiver`**
 
 Create `app/src/test/java/com/example/readbook/scheduling/WeeklySummaryReceiverTest.kt`:
 
@@ -1484,13 +1732,11 @@ class WeeklySummaryReceiverTest {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 6: Run tests to verify they fail, then implement `WeeklySummaryReceiver`**
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.scheduling.WeeklySummaryReceiverTest" --rerun-tasks 2>&1 | tail -40`
 
-Expected: compile error — `Unresolved reference 'today'`, `'dailyProgressDaoOverride'`, `'readingConfigDaoOverride'`, `'schedulerOverride'`, `'scopeOverride'`, `'NOTIFICATION_ID_WEEKLY_SUMMARY'` (the stub `WeeklySummaryReceiver` from Task 3 has none of these).
-
-- [ ] **Step 3: Implement `WeeklySummaryReceiver`**
+Expected: compile error — `Unresolved reference 'today'`, `'dailyProgressDaoOverride'`, `'readingConfigDaoOverride'`, `'schedulerOverride'`, `'scopeOverride'`, `'NOTIFICATION_ID_WEEKLY_SUMMARY'` (the Step 3 shell has none of these).
 
 Replace the full content of `app/src/main/java/com/example/readbook/scheduling/WeeklySummaryReceiver.kt`:
 
@@ -1561,72 +1807,29 @@ class WeeklySummaryReceiver : BroadcastReceiver() {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 7: Run tests to verify they pass**
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.scheduling.WeeklySummaryReceiverTest" --rerun-tasks 2>&1 | tail -40`
 
 Expected: `BUILD SUCCESSFUL`, both tests pass.
 
-- [ ] **Step 5: Add tests for `scheduleWeeklySummary` scheduling math**
-
-Open `app/src/test/java/com/example/readbook/scheduling/NudgeSchedulerTest.kt` and add these three tests at the end of the class, before the closing `}`:
-
-```kotlin
-    @Test
-    fun scheduleWeeklySummary_fromASundayBeforeNine_schedulesTodayAtNine() {
-        val sunday = LocalDate.of(2026, 7, 5)
-        clock.millis = epochMillisAt(sunday, hour = 7)
-
-        scheduler.scheduleWeeklySummary(from = sunday)
-
-        val alarms = shadowOf(alarmManager).getScheduledAlarms()
-        assertEquals(1, alarms.size)
-        assertEquals(epochMillisAt(sunday, hour = 9), alarms[0].triggerAtTime)
-    }
-
-    @Test
-    fun scheduleWeeklySummary_fromASundayAfterNine_schedulesNextSunday() {
-        val sunday = LocalDate.of(2026, 7, 5)
-        clock.millis = epochMillisAt(sunday, hour = 10)
-
-        scheduler.scheduleWeeklySummary(from = sunday)
-
-        val alarms = shadowOf(alarmManager).getScheduledAlarms()
-        assertEquals(epochMillisAt(sunday.plusDays(7), hour = 9), alarms[0].triggerAtTime)
-    }
-
-    @Test
-    fun scheduleWeeklySummary_fromAMidWeekDay_schedulesTheUpcomingSunday() {
-        val wednesday = LocalDate.of(2026, 7, 8)
-        clock.millis = epochMillisAt(wednesday, hour = 6)
-
-        scheduler.scheduleWeeklySummary(from = wednesday)
-
-        val alarms = shadowOf(alarmManager).getScheduledAlarms()
-        assertEquals(epochMillisAt(LocalDate.of(2026, 7, 12), hour = 9), alarms[0].triggerAtTime)
-    }
-```
-
-These should already pass (the implementation landed in Task 3 alongside `scheduleSnooze`, deferred here for the same reason as Task 6 — `WeeklySummaryReceiver` needed to exist meaningfully first for this to be worth asserting against). Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.scheduling.NudgeSchedulerTest" --rerun-tasks 2>&1 | tail -40`
-
-Expected: `BUILD SUCCESSFUL`, all tests (existing 6 + new 3 = 9) pass.
-
-- [ ] **Step 6: Run the full test suite**
+- [ ] **Step 8: Run the full test suite**
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --rerun-tasks 2>&1 | tail -30`
 
 Expected: `BUILD SUCCESSFUL`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 cd "D:/Users/zivk/Documents/GitHub/ReadBook"
 git add \
+  app/src/main/java/com/example/readbook/scheduling/NudgeScheduler.kt \
   app/src/main/java/com/example/readbook/scheduling/WeeklySummaryReceiver.kt \
-  app/src/test/java/com/example/readbook/scheduling/WeeklySummaryReceiverTest.kt \
-  app/src/test/java/com/example/readbook/scheduling/NudgeSchedulerTest.kt
+  app/src/test/java/com/example/readbook/scheduling/NudgeSchedulerTest.kt \
+  app/src/test/java/com/example/readbook/scheduling/WeeklySummaryReceiverTest.kt
 git commit -m "$(cat <<'EOF'
-Implement WeeklySummaryReceiver
+Implement scheduleWeeklySummary and WeeklySummaryReceiver
 
 Fires Sunday 9:00, computes last week's completed-vs-enabled count via
 computeWeeklySummary, posts the notification (skipping if zero days are
@@ -1647,7 +1850,7 @@ EOF
 - Modify: `app/src/test/java/com/example/readbook/scheduling/BootReceiverTest.kt`
 
 **Interfaces:**
-- Consumes: `NudgeScheduler.scheduleWeeklySummary(from: LocalDate)` (Task 3/7).
+- Consumes: `NudgeScheduler.scheduleWeeklySummary(from: LocalDate)` (Task 7).
 - Produces: nothing new for later tasks — this is the last wiring step. `WeeklySummaryReceiver` becomes reachable via `AlarmManager`-delivered broadcasts once registered in the manifest.
 
 - [ ] **Step 1: Write the failing test — update `BootReceiverTest`'s alarm count**
@@ -1750,7 +1953,7 @@ Expected: `BUILD SUCCESSFUL`.
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && total=0; failed=0; for f in app/build/test-results/testDebugUnitTest/*.xml; do t=$(grep -oE 'tests="[0-9]+"' "$f" | grep -oE '[0-9]+'); fl=$(grep -oE 'failures="[0-9]+"' "$f" | grep -oE '[0-9]+'); total=$((total+t)); failed=$((failed+fl)); done; echo "TOTAL=$total FAILED=$failed"`
 
-Expected: `FAILED=0`. Total should be around 111 (baseline before this plan) + 1 (Task 2) + 1 (Task 3 scheduler) + 1 (Task 3 receiver) + 1 (Task 4) + 5 (Task 5) + 2 (Task 6) + 2 (Task 7 receiver) + 3 (Task 7 scheduler) + 5 (Task 1) = 132.
+Expected: `FAILED=0`.
 
 - [ ] **Step 8: Commit**
 
