@@ -235,4 +235,23 @@ class ReadingTimerRepositoryTest {
 
         assertEquals(1, db.readingSessionDao().getByDate(today.toString()).size)
     }
+
+    @Test
+    fun resetToday_withAnActiveSession_finishesTheSessionBeforeResetting() = runTest {
+        clock.millis = 1_000_000L
+        repository.start(today)
+        clock.millis += 120_000L // 120s elapsed, but not stopped yet
+
+        val reset = repository.resetToday(today) // reset while session is active
+
+        // Session should have been recorded for the 120s segment
+        val sessions = db.readingSessionDao().getByDate(today.toString())
+        assertEquals(1, sessions.size)
+        assertEquals(120, sessions[0].secondsAdded)
+
+        // Day should be fully reset
+        assertEquals(DEFAULT_TARGET_SECONDS, reset?.remainingSeconds)
+        assertNull(reset?.activeSessionStartedAt)
+        assertEquals(false, reset?.completed)
+    }
 }

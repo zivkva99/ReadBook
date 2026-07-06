@@ -58,7 +58,12 @@ class ReadingTimerRepository(
      */
     suspend fun resetToday(date: LocalDate): DailyProgress? {
         val key = date.toString()
-        val existing = dailyProgressDao.getByDate(key) ?: return null
+        var existing = dailyProgressDao.getByDate(key) ?: return null
+
+        // If there's an active session, finish it first so the elapsed time is recorded.
+        if (existing.activeSessionStartedAt != null) {
+            existing = finishSession(existing)
+        }
 
         if (existing.completed) {
             rollBackStatsForUncompletedDay(date)
