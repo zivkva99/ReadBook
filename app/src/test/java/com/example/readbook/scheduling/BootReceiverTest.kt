@@ -70,8 +70,9 @@ class BootReceiverTest {
         testScheduler.advanceUntilIdle()
 
         val alarms = shadowOf(alarmManager).getScheduledAlarms()
-        // 5 nudge alarms (all still future at 6am) + 1 rollover alarm for tonight.
-        assertEquals(6, alarms.size)
+        // 5 nudge alarms (all still future at 6am) + 1 rollover alarm for tonight + 1 weekly
+        // summary alarm (today is a Sunday in this test, and 6am is before the 9am slot).
+        assertEquals(7, alarms.size)
     }
 
     @Test
