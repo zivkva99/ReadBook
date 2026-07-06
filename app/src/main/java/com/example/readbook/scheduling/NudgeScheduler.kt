@@ -8,6 +8,7 @@ import com.example.readbook.data.Clock
 import com.example.readbook.data.ReadingConfig
 import com.example.readbook.data.SystemClock
 import com.example.readbook.data.isEnabledDay
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
@@ -55,6 +56,21 @@ class NudgeScheduler(
         alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAt, WINDOW_LENGTH_MS, snoozePendingIntent())
     }
 
+    /** Schedules the weekly summary for the next Sunday 9:00 — [from] today if it's a Sunday
+     * and still before 9:00, otherwise the following Sunday. */
+    fun scheduleWeeklySummary(from: LocalDate) {
+        var candidate = from
+        while (candidate.dayOfWeek != DayOfWeek.SUNDAY) {
+            candidate = candidate.plusDays(1)
+        }
+        var triggerAt = epochMillisAt(candidate, hour = 9)
+        if (triggerAt <= clock.nowMillis()) {
+            candidate = candidate.plusDays(7)
+            triggerAt = epochMillisAt(candidate, hour = 9)
+        }
+        alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAt, WINDOW_LENGTH_MS, weeklySummaryPendingIntent())
+    }
+
     private fun epochMillisAt(date: LocalDate, hour: Int, minute: Int = 0): Long =
         date.atTime(LocalTime.of(hour, minute)).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
@@ -79,13 +95,22 @@ class NudgeScheduler(
         )
     }
 
+    private fun weeklySummaryPendingIntent(): PendingIntent {
+        val intent = Intent(context, WeeklySummaryReceiver::class.java).setAction(ACTION_WEEKLY_SUMMARY)
+        return PendingIntent.getBroadcast(
+            context, WEEKLY_SUMMARY_REQUEST_CODE, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     companion object {
         val NUDGE_HOURS = listOf(9, 10, 11, 12, 13)
         const val WINDOW_LENGTH_MS = 15 * 60 * 1000L
         const val ROLLOVER_REQUEST_CODE = 100
         const val SNOOZE_REQUEST_CODE = 200
         const val SNOOZE_DELAY_MS = 15 * 60 * 1000L
+        const val WEEKLY_SUMMARY_REQUEST_CODE = 400
         const val ACTION_NUDGE = "com.example.readbook.action.NUDGE"
         const val ACTION_ROLLOVER = "com.example.readbook.action.ROLLOVER"
+        const val ACTION_WEEKLY_SUMMARY = "com.example.readbook.action.WEEKLY_SUMMARY"
     }
 }

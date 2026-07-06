@@ -106,4 +106,38 @@ class NudgeSchedulerTest {
         assertEquals(1, alarms.size)
         assertEquals(clock.millis + 15 * 60 * 1000L, alarms[0].triggerAtTime)
     }
+
+    @Test
+    fun scheduleWeeklySummary_fromASundayBeforeNine_schedulesTodayAtNine() {
+        val sunday = LocalDate.of(2026, 7, 5)
+        clock.millis = epochMillisAt(sunday, hour = 7)
+
+        scheduler.scheduleWeeklySummary(from = sunday)
+
+        val alarms = shadowOf(alarmManager).getScheduledAlarms()
+        assertEquals(1, alarms.size)
+        assertEquals(epochMillisAt(sunday, hour = 9), alarms[0].triggerAtTime)
+    }
+
+    @Test
+    fun scheduleWeeklySummary_fromASundayAfterNine_schedulesNextSunday() {
+        val sunday = LocalDate.of(2026, 7, 5)
+        clock.millis = epochMillisAt(sunday, hour = 10)
+
+        scheduler.scheduleWeeklySummary(from = sunday)
+
+        val alarms = shadowOf(alarmManager).getScheduledAlarms()
+        assertEquals(epochMillisAt(sunday.plusDays(7), hour = 9), alarms[0].triggerAtTime)
+    }
+
+    @Test
+    fun scheduleWeeklySummary_fromAMidWeekDay_schedulesTheUpcomingSunday() {
+        val wednesday = LocalDate.of(2026, 7, 8)
+        clock.millis = epochMillisAt(wednesday, hour = 6)
+
+        scheduler.scheduleWeeklySummary(from = wednesday)
+
+        val alarms = shadowOf(alarmManager).getScheduledAlarms()
+        assertEquals(epochMillisAt(LocalDate.of(2026, 7, 12), hour = 9), alarms[0].triggerAtTime)
+    }
 }
