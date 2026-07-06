@@ -3,6 +3,7 @@ package com.example.readbook.notifications
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.readbook.data.WeeklySummary
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -83,6 +84,27 @@ class TimerNotificationsTest {
         assertEquals(2, notification.actions.size)
         assertEquals("Start", notification.actions[0].title)
         assertEquals("Snooze 15m", notification.actions[1].title)
+    }
+
+    @Test
+    fun createChannels_registersWeeklySummaryChannel_withDefaultImportance() {
+        TimerNotifications.createChannels(context)
+
+        val channel = manager.getNotificationChannel(TimerNotifications.CHANNEL_WEEKLY_SUMMARY)
+        assertNotNull(channel)
+        assertEquals(NotificationManager.IMPORTANCE_DEFAULT, channel.importance)
+    }
+
+    @Test
+    fun buildWeeklySummaryNotification_usesWeeklySummaryChannel_andReportsTheCounts() {
+        TimerNotifications.createChannels(context)
+
+        val notification = TimerNotifications.buildWeeklySummaryNotification(
+            context, WeeklySummary(completedCount = 4, enabledCount = 5),
+        )
+
+        assertEquals(TimerNotifications.CHANNEL_WEEKLY_SUMMARY, notification.channelId)
+        assertEquals("You read 4/5 days last week", shadowContentText(notification))
     }
 
     private fun shadowContentText(notification: android.app.Notification): String =

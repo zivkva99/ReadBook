@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import com.example.readbook.R
+import com.example.readbook.data.WeeklySummary
 import com.example.readbook.scheduling.NudgeReceiver
 import com.example.readbook.scheduling.NudgeScheduler
 import com.example.readbook.service.ReadingTimerService
@@ -20,6 +21,7 @@ object TimerNotifications {
     const val CHANNEL_NUDGE = "nudge"
     const val CHANNEL_TIMER = "timer"
     const val CHANNEL_COMPLETION = "completion"
+    const val CHANNEL_WEEKLY_SUMMARY = "weekly_summary"
 
     private const val START_ACTION_REQUEST_CODE = 300
     private const val SNOOZE_ACTION_REQUEST_CODE = 301
@@ -36,6 +38,9 @@ object TimerNotifications {
         )
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_COMPLETION, "Reading completed", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_WEEKLY_SUMMARY, "Weekly summary", NotificationManager.IMPORTANCE_DEFAULT)
         )
     }
 
@@ -76,6 +81,13 @@ object TimerNotifications {
         NotificationCompat.Builder(context, CHANNEL_COMPLETION)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentText("Nice — today's reading is done")
+            .setAutoCancel(true)
+            .build()
+
+    fun buildWeeklySummaryNotification(context: Context, summary: WeeklySummary): Notification =
+        NotificationCompat.Builder(context, CHANNEL_WEEKLY_SUMMARY)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentText("You read ${summary.completedCount}/${summary.enabledCount} days last week")
             .setAutoCancel(true)
             .build()
 }
