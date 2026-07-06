@@ -14,6 +14,7 @@ import com.example.readbook.notifications.TimerNotifications
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -28,6 +29,15 @@ import kotlin.test.assertNull
 class NudgeReceiverTest {
 
     private val context = ApplicationProvider.getApplicationContext<Context>()
+    private val alarmManager = context.getSystemService(AlarmManager::class.java)
+
+    // AlarmManager's shadow state has been observed leaking across test classes when the full
+    // suite runs (order-dependent, not reproducible in isolation) — clear the slate defensively
+    // rather than assume a fresh AlarmManager per test.
+    @Before
+    fun clearAnyPreExistingAlarms() {
+        shadowOf(alarmManager).getScheduledAlarms().forEach { it.operation?.let(alarmManager::cancel) }
+    }
 
     // goAsync() only works when dispatched through the real broadcast mechanism (it reads a
     // PendingResult the framework sets up before onReceive runs) — calling receiver.onReceive()
@@ -94,8 +104,6 @@ class NudgeReceiverTest {
         val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .setQueryCoroutineContext(StandardTestDispatcher(testScheduler))
             .build()
-        val alarmManager = context.getSystemService(AlarmManager::class.java)
-        shadowOf(alarmManager).getScheduledAlarms().forEach { it.operation?.let(alarmManager::cancel) }
 
         val manager = context.getSystemService(NotificationManager::class.java)
         TimerNotifications.createChannels(context)
