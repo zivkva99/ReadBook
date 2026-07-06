@@ -3,9 +3,14 @@ package com.example.readbook.notifications
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import androidx.core.app.NotificationCompat
 import com.example.readbook.R
+import com.example.readbook.scheduling.NudgeReceiver
+import com.example.readbook.scheduling.NudgeScheduler
+import com.example.readbook.service.ReadingTimerService
 
 /**
  * Three separate channels so the persistent timer notification can be muted
@@ -15,6 +20,9 @@ object TimerNotifications {
     const val CHANNEL_NUDGE = "nudge"
     const val CHANNEL_TIMER = "timer"
     const val CHANNEL_COMPLETION = "completion"
+
+    private const val START_ACTION_REQUEST_CODE = 300
+    private const val SNOOZE_ACTION_REQUEST_CODE = 301
 
     fun createChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -31,12 +39,29 @@ object TimerNotifications {
         )
     }
 
-    fun buildNudgeNotification(context: Context): Notification =
-        NotificationCompat.Builder(context, CHANNEL_NUDGE)
+    fun buildNudgeNotification(context: Context): Notification {
+        val startIntent = Intent(context, ReadingTimerService::class.java).setAction(ReadingTimerService.ACTION_START)
+        val startPendingIntent = PendingIntent.getForegroundService(
+            context, START_ACTION_REQUEST_CODE, startIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val snoozeIntent = Intent(context, NudgeReceiver::class.java)
+            .setAction(NudgeScheduler.ACTION_NUDGE)
+            .putExtra(NudgeReceiver.EXTRA_SNOOZE, true)
+        val snoozePendingIntent = PendingIntent.getBroadcast(
+            context, SNOOZE_ACTION_REQUEST_CODE, snoozeIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        return NotificationCompat.Builder(context, CHANNEL_NUDGE)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentText("15 minutes today?")
             .setAutoCancel(true)
+            .addAction(R.drawable.ic_launcher_foreground, "Start", startPendingIntent)
+            .addAction(R.drawable.ic_launcher_foreground, "Snooze 15m", snoozePendingIntent)
             .build()
+    }
 
     fun buildTimerNotification(context: Context, remainingSeconds: Int): Notification {
         val minutes = remainingSeconds / 60

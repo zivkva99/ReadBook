@@ -74,6 +74,17 @@ class TimerNotificationsTest {
         assertEquals("15 minutes today?", shadowContentText(notification))
     }
 
+    @Test
+    fun buildNudgeNotification_hasStartAndSnoozeActions() {
+        TimerNotifications.createChannels(context)
+
+        val notification = TimerNotifications.buildNudgeNotification(context)
+
+        assertEquals(2, notification.actions.size)
+        assertEquals("Start", notification.actions[0].title)
+        assertEquals("Snooze 15m", notification.actions[1].title)
+    }
+
     private fun shadowContentText(notification: android.app.Notification): String =
         notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
 }
