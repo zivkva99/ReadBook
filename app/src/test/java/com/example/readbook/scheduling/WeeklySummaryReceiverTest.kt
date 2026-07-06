@@ -56,19 +56,35 @@ class WeeklySummaryReceiverTest {
 
     // ReadingApp.onCreate()'s self-heal launches a real background coroutine (against the app's
     // real database, on Dispatchers.Default) the moment the test Application is created, and it
-    // reliably wins its race against this test body — landing an unrelated rollover alarm on this
-    // same shared AlarmManager before our final assertions run. It shares nothing with the code
-    // under test here (different receiver, different request code), so cancel that one specific
-    // alarm by reconstructing its identity (component + action + request code all match what
-    // NudgeScheduler.scheduleRollover uses) rather than blanket-clearing, which would also wipe
-    // out this test's own just-scheduled alarm.
-    private fun cancelSelfHealRolloverNoise() {
+    // reliably wins its race against this test body — landing unrelated alarms on this same
+    // shared AlarmManager before our final assertions run. It shares nothing with the code under
+    // test here (different receivers, different request codes), so cancel those specific alarms
+    // by reconstructing their identities (component + action + request code all match what
+    // NudgeScheduler.scheduleRollover / scheduleNudgesForToday use) rather than blanket-clearing,
+    // which would also wipe out this test's own just-scheduled alarm.
+    //
+    // Two kinds of noise can land here: the rollover alarm (request code 100) always scheduled by
+    // the self-heal, and — depending on the real date/time the test happens to run at — up to
+    // five nudge-hour alarms (request codes 9-13, one per NudgeScheduler.NUDGE_HOURS) scheduled
+    // only when "today" (by real wall-clock time) is a default-enabled day and before that hour.
+    // Cancel all of them so this test's alarm-count assertion is stable regardless of when it's
+    // actually run.
+    private fun cancelSelfHealSchedulingNoise() {
         val rolloverIntent = Intent(context, RolloverReceiver::class.java).setAction(NudgeScheduler.ACTION_ROLLOVER)
         val rolloverPendingIntent = PendingIntent.getBroadcast(
             context, NudgeScheduler.ROLLOVER_REQUEST_CODE, rolloverIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         alarmManager.cancel(rolloverPendingIntent)
+
+        for (hour in NudgeScheduler.NUDGE_HOURS) {
+            val nudgeIntent = Intent(context, NudgeReceiver::class.java).setAction(NudgeScheduler.ACTION_NUDGE)
+            val nudgePendingIntent = PendingIntent.getBroadcast(
+                context, hour, nudgeIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            alarmManager.cancel(nudgePendingIntent)
+        }
     }
 
     @Test
@@ -96,7 +112,7 @@ class WeeklySummaryReceiverTest {
 
         dispatch(receiver, NudgeScheduler.ACTION_WEEKLY_SUMMARY)
         testScheduler.advanceUntilIdle()
-        cancelSelfHealRolloverNoise()
+        cancelSelfHealSchedulingNoise()
 
         val manager = context.getSystemService(NotificationManager::class.java)
         val notification = manager.activeNotifications.firstOrNull { it.id == WeeklySummaryReceiver.NOTIFICATION_ID_WEEKLY_SUMMARY }
@@ -127,7 +143,7 @@ class WeeklySummaryReceiverTest {
 
         dispatch(receiver, NudgeScheduler.ACTION_WEEKLY_SUMMARY)
         testScheduler.advanceUntilIdle()
-        cancelSelfHealRolloverNoise()
+        cancelSelfHealSchedulingNoise()
 
         val manager = context.getSystemService(NotificationManager::class.java)
         val notification = manager.activeNotifications.firstOrNull { it.id == WeeklySummaryReceiver.NOTIFICATION_ID_WEEKLY_SUMMARY }
