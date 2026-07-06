@@ -47,6 +47,14 @@ class NudgeScheduler(
         alarmManager.setWindow(AlarmManager.RTC_WAKEUP, nextMidnight, WINDOW_LENGTH_MS, rolloverPendingIntent())
     }
 
+    /** Schedules exactly one extra nudge-check 15 minutes out — triggered by tapping "Snooze"
+     * on a nudge notification. Reuses the normal ACTION_NUDGE path; when it fires it's a
+     * completely ordinary NudgeReceiver invocation (same completion check, same notification). */
+    fun scheduleSnooze() {
+        val triggerAt = clock.nowMillis() + SNOOZE_DELAY_MS
+        alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAt, WINDOW_LENGTH_MS, snoozePendingIntent())
+    }
+
     private fun epochMillisAt(date: LocalDate, hour: Int, minute: Int = 0): Long =
         date.atTime(LocalTime.of(hour, minute)).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
@@ -64,10 +72,19 @@ class NudgeScheduler(
         )
     }
 
+    private fun snoozePendingIntent(): PendingIntent {
+        val intent = Intent(context, NudgeReceiver::class.java).setAction(ACTION_NUDGE)
+        return PendingIntent.getBroadcast(
+            context, SNOOZE_REQUEST_CODE, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     companion object {
         val NUDGE_HOURS = listOf(9, 10, 11, 12, 13)
         const val WINDOW_LENGTH_MS = 15 * 60 * 1000L
         const val ROLLOVER_REQUEST_CODE = 100
+        const val SNOOZE_REQUEST_CODE = 200
+        const val SNOOZE_DELAY_MS = 15 * 60 * 1000L
         const val ACTION_NUDGE = "com.example.readbook.action.NUDGE"
         const val ACTION_ROLLOVER = "com.example.readbook.action.ROLLOVER"
     }

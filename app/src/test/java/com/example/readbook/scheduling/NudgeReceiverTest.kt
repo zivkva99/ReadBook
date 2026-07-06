@@ -1,5 +1,6 @@
 package com.example.readbook.scheduling
 
+import android.app.AlarmManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
@@ -84,6 +85,36 @@ class NudgeReceiverTest {
         val manager = context.getSystemService(NotificationManager::class.java)
         val notification = manager.activeNotifications.firstOrNull { it.id == NudgeReceiver.NOTIFICATION_ID_NUDGE }
         assertNull(notification)
+
+        db.close()
+    }
+
+    @Test
+    fun onReceive_withSnoozeExtra_cancelsNotification_andSchedulesASnoozeAlarm() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+            .setQueryCoroutineContext(StandardTestDispatcher(testScheduler))
+            .build()
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        shadowOf(alarmManager).getScheduledAlarms().forEach { it.operation?.let(alarmManager::cancel) }
+
+        val manager = context.getSystemService(NotificationManager::class.java)
+        TimerNotifications.createChannels(context)
+        manager.notify(NudgeReceiver.NOTIFICATION_ID_NUDGE, TimerNotifications.buildNudgeNotification(context))
+
+        val receiver = NudgeReceiver()
+        receiver.today = { LocalDate.of(2026, 7, 5) }
+        receiver.dailyProgressDaoOverride = db.dailyProgressDao()
+        receiver.nudgeSchedulerOverride = NudgeScheduler(context, FakeClock())
+        receiver.scopeOverride = CoroutineScope(StandardTestDispatcher(testScheduler))
+
+        context.registerReceiver(receiver, IntentFilter(NudgeScheduler.ACTION_NUDGE), Context.RECEIVER_NOT_EXPORTED)
+        context.sendBroadcast(Intent(NudgeScheduler.ACTION_NUDGE).putExtra(NudgeReceiver.EXTRA_SNOOZE, true))
+        shadowOf(Looper.getMainLooper()).idle()
+        testScheduler.advanceUntilIdle()
+
+        val stillActive = manager.activeNotifications.firstOrNull { it.id == NudgeReceiver.NOTIFICATION_ID_NUDGE }
+        assertNull(stillActive)
+        assertEquals(1, shadowOf(alarmManager).getScheduledAlarms().size)
 
         db.close()
     }

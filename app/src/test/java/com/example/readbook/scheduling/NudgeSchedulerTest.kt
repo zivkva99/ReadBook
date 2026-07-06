@@ -95,4 +95,15 @@ class NudgeSchedulerTest {
         assertEquals(1, alarms.size)
         assertEquals(epochMillisAt(enabledDay.plusDays(1), hour = 0, minute = 1), alarms[0].triggerAtTime)
     }
+
+    @Test
+    fun scheduleSnooze_schedulesExactlyOneAlarmFifteenMinutesOut() {
+        clock.millis = epochMillisAt(enabledDay, hour = 10)
+
+        scheduler.scheduleSnooze()
+
+        val alarms = shadowOf(alarmManager).getScheduledAlarms()
+        assertEquals(1, alarms.size)
+        assertEquals(clock.millis + 15 * 60 * 1000L, alarms[0].triggerAtTime)
+    }
 }
