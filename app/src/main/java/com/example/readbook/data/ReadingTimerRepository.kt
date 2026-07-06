@@ -19,6 +19,7 @@ class ReadingTimerRepository(
     suspend fun start(date: LocalDate): DailyProgress {
         val key = date.toString()
         val existing = dailyProgressDao.getByDate(key)
+        if (existing?.completed == true) return existing // guard: don't restart an already-completed day
         val row = if (existing != null) {
             existing.copy(activeSessionStartedAt = clock.nowMillis())
         } else {
@@ -47,6 +48,51 @@ class ReadingTimerRepository(
     suspend fun reconcileCrashedSession(): DailyProgress? {
         val dangling = dailyProgressDao.getActiveSession() ?: return null
         return finishSession(dangling)
+    }
+
+    /**
+     * Restores today's remaining time to the full configured duration. If today was already
+     * completed, also un-completes it and rolls back [Stats] — recalculating the streak by
+     * re-running [StreakCalculator] with today excluded from the completed-dates set, rather
+     * than any bespoke undo logic. A no-op (returns null) if there's no row for today at all.
+     */
+    suspend fun resetToday(date: LocalDate): DailyProgress? {
+        val key = date.toString()
+        val existing = dailyProgressDao.getByDate(key) ?: return null
+
+        if (existing.completed) {
+            rollBackStatsForUncompletedDay(date)
+        }
+
+        val config = readingConfigDao.getConfig()
+        val targetSeconds = config?.targetSeconds ?: DEFAULT_TARGET_SECONDS
+        val reset = existing.copy(
+            targetSeconds = targetSeconds,
+            remainingSeconds = targetSeconds,
+            completed = false,
+            completedAt = null,
+            activeSessionStartedAt = null,
+        )
+        dailyProgressDao.upsert(reset)
+        return reset
+    }
+
+    private suspend fun rollBackStatsForUncompletedDay(date: LocalDate) {
+        val remainingCompletedDates = dailyProgressDao.getCompletedDates()
+            .map { LocalDate.parse(it) }
+            .filter { it != date }
+            .toSet()
+        val config = readingConfigDao.getConfig()
+        val enabledDaysMask = config?.enabledDaysMask ?: DEFAULT_ENABLED_DAYS_MASK
+        val newStreak = StreakCalculator.calculate(remainingCompletedDates, enabledDaysMask, date)
+
+        val priorStats = statsDao.getStats() ?: Stats(totalCompletedDays = 0, currentStreak = 0)
+        statsDao.upsert(
+            priorStats.copy(
+                totalCompletedDays = (priorStats.totalCompletedDays - 1).coerceAtLeast(0),
+                currentStreak = newStreak,
+            )
+        )
     }
 
     private suspend fun finishSession(row: DailyProgress): DailyProgress {

@@ -165,4 +165,74 @@ class ReadingTimerRepositoryTest {
         assertNull(reconciled?.activeSessionStartedAt)
         assertEquals(DEFAULT_TARGET_SECONDS - 60, reconciled?.remainingSeconds)
     }
+
+    @Test
+    fun start_whenTodayIsAlreadyCompleted_isANoOp() = runTest {
+        clock.millis = 1_000_000L
+        repository.start(today)
+        clock.millis += DEFAULT_TARGET_SECONDS * 1000L
+        val completed = repository.stop(today)
+        assertEquals(true, completed?.completed)
+
+        clock.millis += 500_000L
+        val result = repository.start(today)
+
+        assertEquals(completed, result)
+        assertNull(db.dailyProgressDao().getByDate(today.toString())?.activeSessionStartedAt)
+    }
+
+    @Test
+    fun resetToday_onAPausedInProgressDay_restoresFullDuration() = runTest {
+        clock.millis = 1_000_000L
+        repository.start(today)
+        clock.millis += 120_000L
+        repository.stop(today) // paused with remainingSeconds = target - 120
+
+        val reset = repository.resetToday(today)
+
+        assertEquals(DEFAULT_TARGET_SECONDS, reset?.remainingSeconds)
+        assertNull(reset?.activeSessionStartedAt)
+        assertEquals(false, reset?.completed)
+    }
+
+    @Test
+    fun resetToday_whenNoRowExistsForToday_isANoOp() = runTest {
+        val result = repository.resetToday(today)
+
+        assertNull(result)
+    }
+
+    @Test
+    fun resetToday_onACompletedDay_unCompletesAndRollsBackStats() = runTest {
+        clock.millis = 1_000_000L
+        repository.start(today)
+        clock.millis += DEFAULT_TARGET_SECONDS * 1000L
+        repository.stop(today) // completes today
+
+        val statsAfterCompletion = db.statsDao().getStats()
+        assertEquals(1, statsAfterCompletion?.totalCompletedDays)
+        assertEquals(1, statsAfterCompletion?.currentStreak)
+
+        val reset = repository.resetToday(today)
+
+        assertEquals(false, reset?.completed)
+        assertNull(reset?.completedAt)
+        assertEquals(DEFAULT_TARGET_SECONDS, reset?.remainingSeconds)
+
+        val statsAfterReset = db.statsDao().getStats()
+        assertEquals(0, statsAfterReset?.totalCompletedDays)
+        assertEquals(0, statsAfterReset?.currentStreak)
+    }
+
+    @Test
+    fun resetToday_onACompletedDay_doesNotDeletePastReadingSessions() = runTest {
+        clock.millis = 1_000_000L
+        repository.start(today)
+        clock.millis += DEFAULT_TARGET_SECONDS * 1000L
+        repository.stop(today)
+
+        repository.resetToday(today)
+
+        assertEquals(1, db.readingSessionDao().getByDate(today.toString()).size)
+    }
 }
