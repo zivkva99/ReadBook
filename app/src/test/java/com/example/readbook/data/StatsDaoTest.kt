@@ -3,6 +3,7 @@ package com.example.readbook.data
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -56,5 +57,19 @@ class StatsDaoTest {
 
         assertEquals(6, result?.totalCompletedDays)
         assertEquals(0, result?.currentStreak)
+    }
+
+    @Test
+    fun observeStats_emitsNull_whenNothingSaved() = runTest {
+        assertNull(dao.observeStats().first())
+    }
+
+    @Test
+    fun observeStats_emitsLatestValue_afterUpsert() = runTest {
+        dao.upsert(Stats(totalCompletedDays = 5, currentStreak = 3))
+
+        val emitted = dao.observeStats().first()
+
+        assertEquals(5, emitted?.totalCompletedDays)
     }
 }

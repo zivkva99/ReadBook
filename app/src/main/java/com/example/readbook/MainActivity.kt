@@ -15,6 +15,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.readbook.ui.history.HistoryScreen
+import com.example.readbook.ui.history.HistoryViewModel
+import com.example.readbook.ui.history.HistoryViewModelFactory
 import com.example.readbook.ui.home.HomeScreen
 import com.example.readbook.ui.home.HomeViewModel
 import com.example.readbook.ui.home.HomeViewModelFactory
@@ -24,7 +27,7 @@ import com.example.readbook.ui.settings.SettingsViewModelFactory
 import com.example.readbook.ui.theme.ReadBookTheme
 import kotlinx.coroutines.launch
 
-private enum class Screen { HOME, SETTINGS }
+private enum class Screen { HOME, SETTINGS, HISTORY }
 
 class MainActivity : ComponentActivity() {
 
@@ -63,7 +66,17 @@ class MainActivity : ComponentActivity() {
                             uiState = uiState,
                             onToggleTimer = { homeViewModel.onToggleTimer(this) },
                             onOpenSettings = { screen = Screen.SETTINGS },
+                            onOpenHistory = { screen = Screen.HISTORY },
                         )
+                    }
+                    Screen.HISTORY -> {
+                        val historyViewModel: HistoryViewModel = viewModel(
+                            factory = HistoryViewModelFactory(
+                                container.statsDao, container.dailyProgressDao, container.readingSessionDao,
+                            ),
+                        )
+                        val historyState by historyViewModel.uiState.collectAsStateWithLifecycle()
+                        HistoryScreen(uiState = historyState, onBack = { screen = Screen.HOME })
                     }
                     Screen.SETTINGS -> {
                         val settingsViewModel: SettingsViewModel = viewModel(

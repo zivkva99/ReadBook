@@ -24,4 +24,7 @@ interface DailyProgressDao {
 
     @Query("SELECT date FROM daily_progress WHERE completed = 1")
     suspend fun getCompletedDates(): List<String>
+
+    @Query("SELECT * FROM daily_progress ORDER BY date DESC LIMIT :limit")
+    fun observeRecentDays(limit: Int): Flow<List<DailyProgress>>
 }

@@ -3,6 +3,7 @@ package com.example.readbook.data
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ReadingSessionDao {
@@ -11,4 +12,7 @@ interface ReadingSessionDao {
 
     @Insert
     suspend fun insert(session: ReadingSession)
+
+    @Query("SELECT * FROM reading_session ORDER BY date DESC, startedAt ASC")
+    fun observeAllSessions(): Flow<List<ReadingSession>>
 }

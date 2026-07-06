@@ -184,4 +184,40 @@ class DailyProgressDaoTest {
 
         assertEquals(900, emitted?.remainingSeconds)
     }
+
+    @Test
+    fun observeRecentDays_ordersMostRecentDateFirst() = runTest {
+        dao.upsert(
+            DailyProgress(
+                date = "2026-07-03", targetSeconds = 900, remainingSeconds = 0,
+                completed = true, completedAt = 1L, activeSessionStartedAt = null,
+            )
+        )
+        dao.upsert(
+            DailyProgress(
+                date = "2026-07-05", targetSeconds = 900, remainingSeconds = 0,
+                completed = true, completedAt = 2L, activeSessionStartedAt = null,
+            )
+        )
+
+        val days = dao.observeRecentDays(limit = 10).first()
+
+        assertEquals(listOf("2026-07-05", "2026-07-03"), days.map { it.date })
+    }
+
+    @Test
+    fun observeRecentDays_respectsTheLimit() = runTest {
+        repeat(5) { i ->
+            dao.upsert(
+                DailyProgress(
+                    date = "2026-07-0$i", targetSeconds = 900, remainingSeconds = 0,
+                    completed = true, completedAt = 1L, activeSessionStartedAt = null,
+                )
+            )
+        }
+
+        val days = dao.observeRecentDays(limit = 3).first()
+
+        assertEquals(3, days.size)
+    }
 }

@@ -3,6 +3,7 @@ package com.example.readbook.data
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -75,5 +76,22 @@ class ReadingSessionDaoTest {
         dailyProgressDao.deleteByDate("2026-07-05")
 
         assertTrue(sessionDao.getByDate("2026-07-05").isEmpty())
+    }
+
+    @Test
+    fun observeAllSessions_emitsEmptyList_whenNoneExist() = runTest {
+        assertTrue(sessionDao.observeAllSessions().first().isEmpty())
+    }
+
+    @Test
+    fun observeAllSessions_ordersMostRecentDateFirst() = runTest {
+        insertDay("2026-07-04")
+        insertDay("2026-07-05")
+        sessionDao.insert(ReadingSession(date = "2026-07-04", startedAt = 1000L, endedAt = 1300L, secondsAdded = 300))
+        sessionDao.insert(ReadingSession(date = "2026-07-05", startedAt = 2000L, endedAt = 2600L, secondsAdded = 600))
+
+        val sessions = sessionDao.observeAllSessions().first()
+
+        assertEquals(listOf("2026-07-05", "2026-07-04"), sessions.map { it.date })
     }
 }
