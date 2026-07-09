@@ -53,6 +53,7 @@ import java.io.File
 import java.time.LocalDate
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class TanakhScheduleTest {
 
@@ -89,6 +90,20 @@ class TanakhScheduleTest {
         assertEquals(724, entries.size)
         assertEquals(ScheduleEntry("יהושע", "י״ט", LocalDate.of(2026, 6, 14)), entries.first())
         assertEquals(ScheduleEntry("דברי הימים ב׳", "ל״ו", LocalDate.of(2029, 3, 21)), entries.last())
+    }
+
+    @Test
+    fun parseTanakhSchedule_onTheBundledAsset_datesAreStrictlyAscending_withNoDuplicates() {
+        // The entire due/behind derivation logic (BibleReadingStatus.kt) depends on this
+        // invariant holding — nothing enforces it at runtime, so a future hand-edit of the CSV
+        // (e.g. extending the schedule) that breaks ordering would silently corrupt dueCount
+        // math with no other test catching it.
+        val csvText = File("src/main/assets/tanakh_schedule.csv").readText()
+
+        val entries = parseTanakhSchedule(csvText)
+
+        val strictlyAscending = entries.zipWithNext().all { (a, b) -> a.date.isBefore(b.date) }
+        assertTrue(strictlyAscending)
     }
 }
 ```
@@ -137,7 +152,7 @@ fun parseTanakhSchedule(csvText: String): List<ScheduleEntry> =
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.data.TanakhScheduleTest" --rerun-tasks 2>&1 | tail -40`
 
-Expected: `BUILD SUCCESSFUL`, all 3 tests pass.
+Expected: `BUILD SUCCESSFUL`, all 4 tests pass.
 
 - [ ] **Step 6: Commit**
 
@@ -172,7 +187,7 @@ EOF
 - Consumes: nothing new.
 - Produces: `BibleReadingProgressDao` (`suspend fun getProgress(): BibleReadingProgress?`, `fun observeProgress(): Flow<BibleReadingProgress?>`, `suspend fun upsert(progress: BibleReadingProgress)`) — used by Task 4 (`BibleReadingRepository`). `AppContainer.bibleReadingProgressDao` — used by Tasks 4 and 6.
 
-**Note on migration testing:** this task's automated tests use `Room.inMemoryDatabaseBuilder`, which builds fresh from the current entity definitions and does not exercise the migration path (in-memory DBs have no prior version to migrate from). The migration only actually runs when the real app upgrades over an already-installed version with existing data — verified in Task 11's on-device pass, not by an automated test here. This is a deliberate, documented tradeoff: Room's `MigrationTestHelper` is instrumented-test tooling that's fragile to run under this project's Robolectric-only test setup, and this is a single-user personal app where the real device is the environment that matters.
+**Migration testing:** the DAO test below uses `Room.inMemoryDatabaseBuilder`, which builds fresh from the current entity definitions and does not exercise the migration path itself (in-memory DBs have no prior version to migrate from). The migration path is verified two ways instead: Step 8 adds an automated test using Room's `MigrationTestHelper` against the schema already exported to `app/schemas/com.example.readbook.data.AppDatabase/1.json` (this works as a plain Robolectric/JVM test — no instrumentation needed — confirmed by inspecting the actual `room-testing` 2.7.1 class file rather than assumed), and Task 11's on-device upgrade-install pass additionally confirms it against the real installed app with real accumulated history. Belt and suspenders for the one change in this plan where a mistake could lose real data.
 
 - [ ] **Step 1: Write the failing DAO test**
 
@@ -395,13 +410,72 @@ Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTes
 
 Expected: `BUILD SUCCESSFUL`, all 4 tests pass.
 
-- [ ] **Step 8: Run the full suite to confirm nothing else broke**
+- [ ] **Step 8: Add an automated migration test**
+
+This validates that `MIGRATION_1_2` (Step 5) actually applies cleanly to a real v1 database with existing data — using Room's `MigrationTestHelper` against the schema already exported to `app/schemas/com.example.readbook.data.AppDatabase/1.json` (exported by the `ksp { arg("room.schemaLocation", ...) }` config already in `app/build.gradle.kts`). This is a real JVM/Robolectric test, not instrumented — verified against the actual `room-testing-android-2.7.1` class file, which still exposes the classic `MigrationTestHelper(Instrumentation, Class<RoomDatabase>)` constructor and `createDatabase`/`runMigrationsAndValidate(String, Int, ...)` methods `room-testing` is already a `testImplementation` dependency, no new library needed.
+
+Create `app/src/test/java/com/example/readbook/data/AppDatabaseMigrationTest.kt`:
+
+```kotlin
+package com.example.readbook.data
+
+import androidx.room.testing.MigrationTestHelper
+import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class AppDatabaseMigrationTest {
+
+    @get:Rule
+    val helper: MigrationTestHelper = MigrationTestHelper(
+        InstrumentationRegistry.getInstrumentation(),
+        AppDatabase::class.java,
+    )
+
+    @Test
+    fun migrate1To2_preservesExistingData_andAddsTheBibleReadingProgressTable() {
+        // Seed a v1 database with real data, exactly as an already-installed app would have.
+        helper.createDatabase(TEST_DB_NAME, 1).apply {
+            execSQL("INSERT INTO reading_config (id, enabledDaysMask, targetSeconds) VALUES (0, 31, 900)")
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(TEST_DB_NAME, 2, true, AppDatabase.MIGRATION_1_2)
+
+        migrated.query("SELECT enabledDaysMask FROM reading_config WHERE id = 0").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(31, cursor.getInt(0))
+        }
+        migrated.query("SELECT COUNT(*) FROM bible_reading_progress").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals(0, cursor.getInt(0))
+        }
+    }
+
+    companion object {
+        private const val TEST_DB_NAME = "migration-test"
+    }
+}
+```
+
+Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.data.AppDatabaseMigrationTest" --rerun-tasks 2>&1 | tail -40`
+
+Expected: `BUILD SUCCESSFUL` — the migration applies to a populated v1 database, the pre-existing `reading_config` row survives untouched, and the new `bible_reading_progress` table exists and is queryable. This is concrete evidence, not just eyeballing the SQL, that upgrading a real installed copy of the app won't lose the user's existing reading history.
+
+- [ ] **Step 9: Run the full suite to confirm nothing else broke**
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --rerun-tasks 2>&1 | tail -30`
 
 Expected: `BUILD SUCCESSFUL`.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 cd "D:/Users/zivk/Documents/GitHub/ReadBook"
@@ -410,13 +484,15 @@ git add \
   app/src/main/java/com/example/readbook/data/BibleReadingProgressDao.kt \
   app/src/main/java/com/example/readbook/data/AppDatabase.kt \
   app/src/main/java/com/example/readbook/data/AppContainer.kt \
-  app/src/test/java/com/example/readbook/data/BibleReadingProgressDaoTest.kt
+  app/src/test/java/com/example/readbook/data/BibleReadingProgressDaoTest.kt \
+  app/src/test/java/com/example/readbook/data/AppDatabaseMigrationTest.kt
 git commit -m "$(cat <<'EOF'
 Add BibleReadingProgress entity, DAO, and the app's first Room migration
 
 Single-row cursorIndex table tracking the next unread Tanakh chapter,
 same singleton pattern as ReadingConfig. version 1->2 with a real
-Migration, never fallbackToDestructiveMigration().
+Migration, never fallbackToDestructiveMigration(), verified with an
+automated MigrationTestHelper test against the exported v1 schema.
 EOF
 )"
 ```
@@ -596,7 +672,8 @@ EOF
 
 **Interfaces:**
 - Consumes: `BibleReadingProgressDao` (Task 2), `ScheduleEntry`/`parseTanakhSchedule` (Task 1), `BibleReadingStatus`/`deriveBibleReadingStatus` (Task 3).
-- Produces: `class BibleReadingRepository(dao: BibleReadingProgressDao, schedule: List<ScheduleEntry>)` with `fun observeStatus(today: () -> LocalDate): Flow<BibleReadingStatus>`, `suspend fun currentStatus(today: LocalDate): BibleReadingStatus`, `suspend fun markRead()` — used by Task 6 (`HomeViewModel`) and Task 9 (`BibleReadingReminderReceiver`). `AppContainer.tanakhSchedule: List<ScheduleEntry>` and `AppContainer.bibleReadingRepository: BibleReadingRepository`.
+- Produces: `class BibleReadingRepository(dao: BibleReadingProgressDao, schedule: List<ScheduleEntry>)` with `fun observeStatus(today: () -> LocalDate): Flow<BibleReadingStatus>`, `suspend fun currentStatus(today: LocalDate): BibleReadingStatus`, `suspend fun markRead()`, `suspend fun undoMarkRead()` — used by Task 6 (`HomeViewModel`) and Task 9 (`BibleReadingReminderReceiver`). `AppContainer.tanakhSchedule: List<ScheduleEntry>` and `AppContainer.bibleReadingRepository: BibleReadingRepository`.
+- `undoMarkRead()` exists so Task 7's Home screen can offer a short-lived "undo" action after tapping the mark-as-read button — the only destructive, unrecoverable action in this feature otherwise.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -683,6 +760,24 @@ class BibleReadingRepositoryTest {
         assertEquals(BibleReadingStatus.OnSchedule(schedule[0]), before)
         assertIs<BibleReadingStatus.Waiting>(after)
     }
+
+    @Test
+    fun undoMarkRead_reversesTheLastMarkRead() = runTest {
+        repository.markRead()
+
+        repository.undoMarkRead()
+
+        val status = repository.currentStatus(today = LocalDate.of(2026, 7, 5))
+        assertEquals(BibleReadingStatus.OnSchedule(schedule[0]), status)
+    }
+
+    @Test
+    fun undoMarkRead_atCursorZero_isANoOp_neverGoesNegative() = runTest {
+        repository.undoMarkRead()
+
+        val status = repository.currentStatus(today = LocalDate.of(2026, 7, 5))
+        assertEquals(BibleReadingStatus.OnSchedule(schedule[0]), status)
+    }
 }
 ```
 
@@ -721,6 +816,15 @@ class BibleReadingRepository(
         val cursorIndex = dao.getProgress()?.cursorIndex ?: 0
         dao.upsert(BibleReadingProgress(cursorIndex = cursorIndex + 1))
     }
+
+    /** Reverses the last [markRead] — used by the Home screen's short-lived "undo" action.
+     * Never goes negative; a no-op at cursor 0. */
+    suspend fun undoMarkRead() {
+        val cursorIndex = dao.getProgress()?.cursorIndex ?: 0
+        if (cursorIndex > 0) {
+            dao.upsert(BibleReadingProgress(cursorIndex = cursorIndex - 1))
+        }
+    }
 }
 ```
 
@@ -728,30 +832,68 @@ class BibleReadingRepository(
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.data.BibleReadingRepositoryTest" --rerun-tasks 2>&1 | tail -40`
 
-Expected: `BUILD SUCCESSFUL`, all 4 tests pass.
+Expected: `BUILD SUCCESSFUL`, all 6 tests pass.
 
 - [ ] **Step 5: Wire `tanakhSchedule` and `bibleReadingRepository` into `AppContainer`**
 
-In `app/src/main/java/com/example/readbook/data/AppContainer.kt`, add the import and two new properties. The import block becomes:
+`tanakhSchedule` wraps the asset read + parse in a `try`/`catch`, falling back to an empty schedule rather than crashing: a malformed/missing CSV asset would otherwise throw out of a `lazy` property first touched during `MainActivity.onCreate()` (via `HomeViewModelFactory(..., container.bibleReadingRepository)` in Task 7), taking down the *entire* Home screen — including the unrelated 15-minute timer feature — instead of just degrading this one card. An empty schedule makes `deriveBibleReadingStatus` naturally return `Finished` (no chapter to show), which is a safe, inert degradation.
+
+(This still runs on whichever thread first touches `container.bibleReadingRepository` — Task 7 wires that access into `MainActivity.onCreate()`, i.e. the main thread. Task 10 adds a warm-up call from `ReadingApp`'s existing background coroutine so the parse happens off the main thread before `MainActivity` ever needs it — noted there since that's the task that already touches `ReadingApp.kt`.)
+
+Replace the full content of `app/src/main/java/com/example/readbook/data/AppContainer.kt`:
 
 ```kotlin
+package com.example.readbook.data
+
 import android.content.Context
 import androidx.room.Room
 import com.example.readbook.scheduling.NudgeScheduler
 import com.example.readbook.scheduling.NudgeSchedulingCoordinator
-```
 
-(no new import needed — `parseTanakhSchedule`, `ScheduleEntry`, and `BibleReadingRepository` are all in the same `com.example.readbook.data` package as `AppContainer`)
+/** Manual DI — no framework needed at this app's size. One instance, owned by [com.example.readbook.ReadingApp]. */
+class AppContainer(context: Context) {
 
-Add these two properties at the end of the class body, just before the closing `}`:
+    private val appContext = context.applicationContext
 
-```kotlin
+    private val db: AppDatabase by lazy {
+        Room.databaseBuilder(appContext, AppDatabase::class.java, "readbook.db")
+            // Never fallbackToDestructiveMigration() — the entire point of this schema is
+            // long-term reading history; add a real Migration when the schema ever changes.
+            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .build()
+    }
 
+    val readingConfigDao get() = db.readingConfigDao()
+    val dailyProgressDao get() = db.dailyProgressDao()
+    val readingSessionDao get() = db.readingSessionDao()
+    val statsDao get() = db.statsDao()
+    val bibleReadingProgressDao get() = db.bibleReadingProgressDao()
+
+    val readingTimerRepository: ReadingTimerRepository by lazy {
+        ReadingTimerRepository(
+            dailyProgressDao = dailyProgressDao,
+            readingSessionDao = readingSessionDao,
+            readingConfigDao = readingConfigDao,
+            statsDao = statsDao,
+            clock = SystemClock,
+        )
+    }
+
+    val nudgeScheduler: NudgeScheduler by lazy { NudgeScheduler(appContext) }
+
+    val nudgeSchedulingCoordinator: NudgeSchedulingCoordinator by lazy {
+        NudgeSchedulingCoordinator(readingConfigDao = readingConfigDao, scheduler = nudgeScheduler)
+    }
+
+    /** Falls back to an empty schedule (never throws) if the bundled asset is ever missing or
+     * malformed — see this step's note on why a crash here must not take down the whole app. */
     val tanakhSchedule: List<ScheduleEntry> by lazy {
-        val csvText = context.applicationContext.assets.open("tanakh_schedule.csv")
-            .bufferedReader()
-            .use { it.readText() }
-        parseTanakhSchedule(csvText)
+        try {
+            val csvText = appContext.assets.open("tanakh_schedule.csv").bufferedReader().use { it.readText() }
+            parseTanakhSchedule(csvText)
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     val bibleReadingRepository: BibleReadingRepository by lazy {
@@ -759,8 +901,6 @@ Add these two properties at the end of the class body, just before the closing `
     }
 }
 ```
-
-(remove the old trailing `}` when pasting — this replaces the final closing brace of the class.)
 
 - [ ] **Step 6: Run the full suite to confirm nothing else broke**
 
@@ -781,8 +921,11 @@ Add BibleReadingRepository and wire the schedule/repository into AppContainer
 
 Thin wrapper over BibleReadingProgressDao + the parsed schedule,
 exposing observeStatus (reactive, for the Home screen), currentStatus
-(one-shot, for the reminder receiver), and markRead (advances the
-cursor by exactly one chapter).
+(one-shot, for the reminder receiver), markRead (advances the cursor
+by exactly one chapter), and undoMarkRead (reverses it, backing the
+Home screen's undo action - markRead is otherwise the one
+unrecoverable action in this feature). tanakhSchedule falls back to an
+empty list on a parse failure instead of crashing the whole app.
 EOF
 )"
 ```
@@ -797,7 +940,9 @@ EOF
 
 **Interfaces:**
 - Consumes: `BibleReadingStatus` (Task 3).
-- Produces: `data class BibleReadingUiState(val chapterText: String?, val buttonEnabled: Boolean, val message: String?, val finished: Boolean)` and `fun deriveBibleReadingUiState(status: BibleReadingStatus): BibleReadingUiState` — used by Task 6 (`HomeViewModel`) and Task 7 (`HomeScreen`).
+- Produces: `data class BibleReadingUiState(val chapterText: String?, val buttonEnabled: Boolean, val message: String?, val messageIsUrgent: Boolean, val finished: Boolean)` and `fun deriveBibleReadingUiState(status: BibleReadingStatus): BibleReadingUiState` — used by Task 6 (`HomeViewModel`) and Task 7 (`HomeScreen`).
+- `messageIsUrgent` is true only for `Behind` — Task 7 uses it to color that message distinctly (it's the one message meant to prompt action; without emphasis it reads identically to the neutral `Waiting` message).
+- The `Waiting` message wraps its date substring in Unicode directional-isolate characters (`⁦` LEFT-TO-RIGHT ISOLATE ... `⁩` POP DIRECTIONAL ISOLATE) — an RTL Hebrew sentence with an unisolated LTR-formatted date (`14.6.2026`) risks the digits reordering unpredictably at the bidi boundary depending on the platform's bidi algorithm.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -821,32 +966,35 @@ class BibleReadingUiStateTest {
         val state = deriveBibleReadingUiState(BibleReadingStatus.OnSchedule(entry))
 
         assertEquals(
-            BibleReadingUiState(chapterText = "יהושע י״ט", buttonEnabled = true, message = null, finished = false),
-            state,
-        )
-    }
-
-    @Test
-    fun behind_showsChapterAndEnabledButton_withBehindCountMessage() {
-        val state = deriveBibleReadingUiState(BibleReadingStatus.Behind(entry, dueCount = 3))
-
-        assertEquals(
             BibleReadingUiState(
                 chapterText = "יהושע י״ט", buttonEnabled = true,
-                message = "אתה בפיגור של 3 פרקים", finished = false,
+                message = null, messageIsUrgent = false, finished = false,
             ),
             state,
         )
     }
 
     @Test
-    fun waiting_showsUpcomingChapterAndDisabledButton_withReturnDateMessage() {
+    fun behind_showsChapterAndEnabledButton_withUrgentBehindCountMessage() {
+        val state = deriveBibleReadingUiState(BibleReadingStatus.Behind(entry, dueCount = 3))
+
+        assertEquals(
+            BibleReadingUiState(
+                chapterText = "יהושע י״ט", buttonEnabled = true,
+                message = "אתה בפיגור של 3 פרקים", messageIsUrgent = true, finished = false,
+            ),
+            state,
+        )
+    }
+
+    @Test
+    fun waiting_showsUpcomingChapterAndDisabledButton_withReturnDateMessage_dateIsBidiIsolated() {
         val state = deriveBibleReadingUiState(BibleReadingStatus.Waiting(entry))
 
         assertEquals(
             BibleReadingUiState(
                 chapterText = "יהושע י״ט", buttonEnabled = false,
-                message = "נחזור לקרוא ב 14.6.2026", finished = false,
+                message = "נחזור לקרוא ב ⁦14.6.2026⁩", messageIsUrgent = false, finished = false,
             ),
             state,
         )
@@ -857,7 +1005,10 @@ class BibleReadingUiStateTest {
         val state = deriveBibleReadingUiState(BibleReadingStatus.Finished)
 
         assertEquals(
-            BibleReadingUiState(chapterText = null, buttonEnabled = false, message = null, finished = true),
+            BibleReadingUiState(
+                chapterText = null, buttonEnabled = false,
+                message = null, messageIsUrgent = false, finished = true,
+            ),
             state,
         )
     }
@@ -884,29 +1035,38 @@ data class BibleReadingUiState(
     val chapterText: String?,
     val buttonEnabled: Boolean,
     val message: String?,
+    val messageIsUrgent: Boolean,
     val finished: Boolean,
 )
 
 private val DISPLAY_DATE_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("d.M.yyyy")
 
+// Unicode directional isolates — keep the LTR-formatted date from reordering unpredictably
+// inside the surrounding RTL sentence.
+private const val LRI = "⁦" // LEFT-TO-RIGHT ISOLATE
+private const val PDI = "⁩" // POP DIRECTIONAL ISOLATE
+
 fun deriveBibleReadingUiState(status: BibleReadingStatus): BibleReadingUiState = when (status) {
     is BibleReadingStatus.Finished -> BibleReadingUiState(
-        chapterText = null, buttonEnabled = false, message = null, finished = true,
+        chapterText = null, buttonEnabled = false,
+        message = null, messageIsUrgent = false, finished = true,
     )
     is BibleReadingStatus.OnSchedule -> BibleReadingUiState(
         chapterText = "${status.entry.book} ${status.entry.chapterHeb}",
-        buttonEnabled = true, message = null, finished = false,
+        buttonEnabled = true, message = null, messageIsUrgent = false, finished = false,
     )
     is BibleReadingStatus.Behind -> BibleReadingUiState(
         chapterText = "${status.entry.book} ${status.entry.chapterHeb}",
         buttonEnabled = true,
         message = "אתה בפיגור של ${status.dueCount} פרקים",
+        messageIsUrgent = true,
         finished = false,
     )
     is BibleReadingStatus.Waiting -> BibleReadingUiState(
         chapterText = "${status.entry.book} ${status.entry.chapterHeb}",
         buttonEnabled = false,
-        message = "נחזור לקרוא ב ${status.entry.date.format(DISPLAY_DATE_FORMATTER)}",
+        message = "נחזור לקרוא ב $LRI${status.entry.date.format(DISPLAY_DATE_FORMATTER)}$PDI",
+        messageIsUrgent = false,
         finished = false,
     )
 }
@@ -930,6 +1090,9 @@ Add BibleReadingUiState derivation for the Home screen card
 
 Maps BibleReadingStatus to display text/button-enabled/message,
 including the exact Hebrew copy for the behind and waiting states.
+messageIsUrgent flags the Behind message for visual emphasis, and the
+Waiting message's date is bidi-isolated to avoid digit-reordering risk
+inside the surrounding RTL sentence.
 EOF
 )"
 ```
@@ -945,7 +1108,7 @@ EOF
 
 **Interfaces:**
 - Consumes: `BibleReadingRepository` (Task 4), `deriveBibleReadingUiState`/`BibleReadingUiState` (Task 5).
-- Produces: `HomeViewModel.bibleReadingUiState: StateFlow<BibleReadingUiState>` and `HomeViewModel.onMarkChapterRead()` — used by Task 7 (`HomeScreen`/`MainActivity`).
+- Produces: `HomeViewModel.bibleReadingUiState: StateFlow<BibleReadingUiState>`, `HomeViewModel.onMarkChapterRead()`, `HomeViewModel.onUndoMarkChapterRead()` — used by Task 7 (`HomeScreen`/`MainActivity`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1017,8 +1180,29 @@ Add these two tests at the end of the class, just before the closing `}`:
         viewModel.onMarkChapterRead()
         testScheduler.runCurrent()
 
+        // Cursor now points at schedule[1] (2026-7-6), but "today" is still 2026-7-5 - the
+        // post-condition here is Waiting, not OnSchedule, so the button must be disabled.
+        // Asserting only chapterText would pass even if buttonEnabled were wrongly left true.
         val state = viewModel.bibleReadingUiState.value
         assertEquals("כ׳", state.chapterText?.substringAfter(" "))
+        assertEquals(false, state.buttonEnabled)
+
+        db.close()
+    }
+
+    @Test
+    fun onUndoMarkChapterRead_reversesTheCursorAdvance() = runTest {
+        val (viewModel, db) = buildViewModel(FakeClock(), LocalDate.of(2026, 7, 5))
+        testScheduler.runCurrent()
+        viewModel.onMarkChapterRead()
+        testScheduler.runCurrent()
+
+        viewModel.onUndoMarkChapterRead()
+        testScheduler.runCurrent()
+
+        val state = viewModel.bibleReadingUiState.value
+        assertEquals("י״ט", state.chapterText?.substringAfter(" "))
+        assertEquals(true, state.buttonEnabled)
 
         db.close()
     }
@@ -1092,7 +1276,10 @@ class HomeViewModel(
         .stateIn(
             viewModelScope,
             SharingStarted.Eagerly,
-            BibleReadingUiState(chapterText = null, buttonEnabled = false, message = null, finished = false),
+            BibleReadingUiState(
+                chapterText = null, buttonEnabled = false,
+                message = null, messageIsUrgent = false, finished = false,
+            ),
         )
 
     /** No-op from [HomeUiState.NotConfigured] or [HomeUiState.Done] — nothing to toggle there. */
@@ -1120,6 +1307,14 @@ class HomeViewModel(
     fun onMarkChapterRead() {
         viewModelScope.launch {
             bibleReadingRepository.markRead()
+        }
+    }
+
+    /** Backs the Home screen's short-lived "undo" action — markRead() is otherwise the one
+     * unrecoverable action in this feature. */
+    fun onUndoMarkChapterRead() {
+        viewModelScope.launch {
+            bibleReadingRepository.undoMarkRead()
         }
     }
 }
@@ -1170,7 +1365,8 @@ git commit -m "$(cat <<'EOF'
 Wire BibleReadingUiState and onMarkChapterRead into HomeViewModel
 
 Exposes a second, independent StateFlow alongside the existing timer
-uiState - MainActivity's call site is fixed in the next task, which
+uiState, plus onUndoMarkChapterRead() backing the Home screen's undo
+action - MainActivity's call site is fixed in the next task, which
 also adds the card that actually consumes this new state.
 EOF
 )"
@@ -1185,10 +1381,16 @@ EOF
 - Modify: `app/src/main/java/com/example/readbook/MainActivity.kt`
 
 **Interfaces:**
-- Consumes: `HomeViewModel.bibleReadingUiState`/`onMarkChapterRead()` (Task 6), `AppContainer.bibleReadingRepository` (Task 4).
+- Consumes: `HomeViewModel.bibleReadingUiState`/`onMarkChapterRead()`/`onUndoMarkChapterRead()` (Task 6), `AppContainer.bibleReadingRepository` (Task 4).
 - Produces: nothing new for later tasks — this is the last piece needed to see the feature end-to-end in the app.
 
 This task has no new automated tests — this codebase has no Compose UI test suite (only ViewModel/state tests, already covered in Tasks 5-6). Its correctness is confirmed visually in Task 11's on-device pass.
+
+Three fixes folded in here from review, beyond the base card:
+- **Scroll container**: the outer `Column` now wraps in `verticalScroll` — two stacked content blocks (timer + Bible card) with no scroll risked clipped/unreachable content on smaller screens, especially with `NotificationsOffBanner` also showing.
+- **Stable button position, `Arrangement.Top` not `Center`**: previously the whole screen was vertically centered, so `BibleReadingCard`'s (and its button's) on-screen position drifted depending on which timer state was showing (different states render different heights above it). `markRead()` is irreversible, so an unstable button position next to a fat-finger risk is worth fixing structurally, not just mitigating.
+- **Undo action**: pressing "קראתי" now also shows a snackbar with a "בטל" (undo) action; tapping it calls `onUndoMarkChapterRead()`. Belt-and-suspenders with the position fix above — the button also being irreversible with zero correction path was the other half of the same risk.
+- **Message color**: `messageIsUrgent` (Task 5) now colors the `Behind` message with `MaterialTheme.colorScheme.error` — previously it rendered identically to the neutral `Waiting` message, undermining its whole point of prompting catch-up action.
 
 - [ ] **Step 1: Add the `BibleReadingCard` composable and wire it into `HomeScreen`**
 
@@ -1201,6 +1403,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Settings
@@ -1210,6 +1414,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -1219,11 +1426,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1235,7 +1445,10 @@ fun HomeScreen(
     onOpenHistory: () -> Unit,
     onResetToday: () -> Unit,
     onMarkChapterRead: () -> Unit,
+    onUndoMarkChapterRead: () -> Unit,
 ) {
+    val snackbarHostState = remember { SnackbarHostState() }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1249,16 +1462,23 @@ fun HomeScreen(
                     }
                 },
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
             if (uiState.notificationsDenied) {
                 NotificationsOffBanner()
             }
             Column(
-                modifier = Modifier.fillMaxSize().padding(24.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
+                // Top, not Center - a variable-height timer section above BibleReadingCard would
+                // otherwise shift the card's (and its button's) on-screen position between
+                // sessions/states, which is a real fat-finger risk on an irreversible action.
+                verticalArrangement = Arrangement.Top,
             ) {
                 when (uiState) {
                     is HomeUiState.NotConfigured -> Text("Setting up…")
@@ -1266,7 +1486,7 @@ fun HomeScreen(
                     is HomeUiState.Done -> DoneContent(onResetToday)
                     is HomeUiState.InProgress -> InProgressContent(uiState, onToggleTimer, onResetToday)
                 }
-                BibleReadingCard(bibleReadingUiState, onMarkChapterRead)
+                BibleReadingCard(bibleReadingUiState, onMarkChapterRead, onUndoMarkChapterRead, snackbarHostState)
             }
         }
     }
@@ -1332,7 +1552,13 @@ private fun InProgressContent(
 }
 
 @Composable
-private fun BibleReadingCard(uiState: BibleReadingUiState, onMarkChapterRead: () -> Unit) {
+private fun BibleReadingCard(
+    uiState: BibleReadingUiState,
+    onMarkChapterRead: () -> Unit,
+    onUndoMarkChapterRead: () -> Unit,
+    snackbarHostState: SnackbarHostState,
+) {
+    val scope = rememberCoroutineScope()
     Column(
         modifier = Modifier.padding(top = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1342,13 +1568,30 @@ private fun BibleReadingCard(uiState: BibleReadingUiState, onMarkChapterRead: ()
         } else {
             uiState.chapterText?.let { Text(it, style = MaterialTheme.typography.titleLarge) }
             Button(
-                onClick = onMarkChapterRead,
+                onClick = {
+                    onMarkChapterRead()
+                    scope.launch {
+                        val result = snackbarHostState.showSnackbar(
+                            message = "סומן כנקרא",
+                            actionLabel = "בטל",
+                        )
+                        if (result == SnackbarResult.ActionPerformed) {
+                            onUndoMarkChapterRead()
+                        }
+                    }
+                },
                 enabled = uiState.buttonEnabled,
                 modifier = Modifier.padding(top = 8.dp),
             ) {
                 Text("קראתי")
             }
-            uiState.message?.let { Text(it, modifier = Modifier.padding(top = 8.dp)) }
+            uiState.message?.let {
+                Text(
+                    it,
+                    modifier = Modifier.padding(top = 8.dp),
+                    color = if (uiState.messageIsUrgent) MaterialTheme.colorScheme.error else Color.Unspecified,
+                )
+            }
         }
     }
 }
@@ -1384,6 +1627,7 @@ And update the `HomeScreen(...)` call:
                             onOpenHistory = { screen = Screen.HISTORY },
                             onResetToday = { homeViewModel.onResetToday() },
                             onMarkChapterRead = { homeViewModel.onMarkChapterRead() },
+                            onUndoMarkChapterRead = { homeViewModel.onUndoMarkChapterRead() },
                         )
                     }
 ```
@@ -1405,9 +1649,12 @@ git commit -m "$(cat <<'EOF'
 Add the Bible reading card to the Home screen
 
 New card below the existing timer content: shows the current/upcoming
-chapter, a mark-as-read button (enabled only when due), and the
-behind/waiting message. Wires HomeViewModel's new state and action
-through MainActivity.
+chapter, a mark-as-read button (enabled only when due) with an undo
+snackbar, and the behind/waiting message (behind styled in the error
+color for visibility). Outer layout now top-anchored and scrollable
+instead of vertically centered, so the card's position - and its
+irreversible button - stays stable across timer states. Wires
+HomeViewModel's new state and actions through MainActivity.
 EOF
 )"
 ```
@@ -1433,6 +1680,7 @@ import com.example.readbook.MainActivity
 import com.example.readbook.data.ScheduleEntry
 import org.robolectric.Shadows.shadowOf
 import java.time.LocalDate
+import kotlin.test.assertTrue
 ```
 
 Add these tests at the end of the class, just before the closing `}`:
@@ -1468,6 +1716,23 @@ Add these tests at the end of the class, just before the closing `}`:
 
         val shadowPendingIntent = shadowOf(notification.contentIntent)
         assertEquals(MainActivity::class.java.name, shadowPendingIntent.savedIntent.component?.className)
+    }
+
+    @Test
+    fun buildBibleReadingReminderNotification_tapDoesNotStackADuplicateActivity() {
+        // This is the first notification in this codebase that opens an Activity at all (grepped
+        // the whole app/src/main tree for setContentIntent/PendingIntent.getActivity - zero prior
+        // hits). MainActivity has no launchMode set (defaults to "standard"), so without these
+        // flags, tapping the notification while an instance is already open/backgrounded would
+        // push a second MainActivity instance onto the task instead of resuming the existing one.
+        TimerNotifications.createChannels(context)
+        val entry = ScheduleEntry("יהושע", "י״ט", LocalDate.of(2026, 6, 14))
+
+        val notification = TimerNotifications.buildBibleReadingReminderNotification(context, entry)
+
+        val flags = shadowOf(notification.contentIntent).savedIntent.flags
+        assertTrue(flags and android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP != 0)
+        assertTrue(flags and android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
     }
 ```
 
@@ -1531,8 +1796,13 @@ Add the new builder function at the end of the object, just before the closing `
 ```kotlin
 
     fun buildBibleReadingReminderNotification(context: Context, entry: ScheduleEntry): Notification {
+        // CLEAR_TOP + SINGLE_TOP: the first notification in this app to open an Activity at all.
+        // MainActivity has no launchMode set, so without these a tap while an instance is already
+        // open/backgrounded would stack a duplicate MainActivity instead of resuming it.
+        val activityIntent = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val contentIntent = PendingIntent.getActivity(
-            context, OPEN_APP_REQUEST_CODE, Intent(context, MainActivity::class.java),
+            context, OPEN_APP_REQUEST_CODE, activityIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         return NotificationCompat.Builder(context, CHANNEL_BIBLE_READING)
@@ -1549,7 +1819,7 @@ Add the new builder function at the end of the object, just before the closing `
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.notifications.TimerNotificationsTest" --rerun-tasks 2>&1 | tail -40`
 
-Expected: `BUILD SUCCESSFUL`, all tests pass (existing 9 + 3 new = 12).
+Expected: `BUILD SUCCESSFUL`, all tests pass (existing 9 + 4 new = 13).
 
 - [ ] **Step 5: Commit**
 
@@ -1564,7 +1834,9 @@ Add the Bible reading reminder notification channel and builder
 Unlike the existing nudge/weekly-summary notifications, this one sets
 a contentIntent so tapping it opens MainActivity directly - there's no
 in-notification action button, per the design decision to keep
-marking-read a deliberate in-app action.
+marking-read a deliberate in-app action. CLEAR_TOP/SINGLE_TOP flags
+prevent stacking a duplicate MainActivity instance on tap, since this
+is the first notification in the app to open an Activity at all.
 EOF
 )"
 ```
@@ -1927,19 +2199,89 @@ EOF
 ## Task 10: Self-heal wiring
 
 **Files:**
+- Modify: `app/src/main/java/com/example/readbook/scheduling/NudgeSchedulingCoordinator.kt`
+- Modify: `app/src/test/java/com/example/readbook/scheduling/NudgeSchedulingCoordinatorTest.kt`
 - Modify: `app/src/main/java/com/example/readbook/ReadingApp.kt`
 - Modify: `app/src/main/java/com/example/readbook/scheduling/BootReceiver.kt`
 - Modify: `app/src/test/java/com/example/readbook/scheduling/BootReceiverTest.kt`
 
 **Interfaces:**
 - Consumes: `NudgeScheduler.scheduleBibleReminderHoursForToday(date, config)` (Task 9).
-- Produces: nothing new for later tasks — this is the last wiring step.
+- Produces: `NudgeSchedulingCoordinator.ensureBibleReminderScheduled(date: LocalDate)` — nothing else for later tasks; this is the last wiring step.
+
+`NudgeSchedulingCoordinator` exists specifically to be the one shared "fetch config, null-check, schedule" self-heal entry point — `ensureScheduled()` already does exactly this for nudges. Rather than pasting a second copy of that fetch+null-check directly into both `ReadingApp.onCreate()` and `BootReceiver.onReceive()` (which would need to be kept in sync by hand across two files for something the coordinator abstraction exists to prevent), this task adds a sibling method to the coordinator itself, so both call sites stay one-line calls — the same shape as their existing `coordinator.ensureScheduled(date)` call.
 
 `RolloverReceiver` is deliberately **not** touched here — it doesn't call `scheduleWeeklySummary` today either (verified by reading the source), so this task follows that same existing (if slightly inconsistent) pattern rather than expanding scope beyond what this feature needs.
 
-- [ ] **Step 1: Write the failing test — update `BootReceiverTest`'s alarm count**
+- [ ] **Step 1: Write the failing coordinator tests**
 
-Open `app/src/test/java/com/example/readbook/scheduling/BootReceiverTest.kt`. `BootReceiver` needs a `ReadingConfigDao` seam the same way it already has `coordinatorOverride`/`schedulerOverride` — reaching into the real `container.readingConfigDao` directly (bypassing the test's own in-memory `db`) would silently depend on a real on-disk database in tests instead of the isolated one this test already builds. Update the test body to set the new override and the alarm-count assertion:
+Open `app/src/test/java/com/example/readbook/scheduling/NudgeSchedulingCoordinatorTest.kt`. Add these tests at the end of the class, just before the closing `}`:
+
+```kotlin
+
+    @Test
+    fun ensureBibleReminderScheduled_withSavedConfig_schedulesReminderHours() = runTest {
+        db.readingConfigDao().upsert(ReadingConfig(enabledDaysMask = DEFAULT_ENABLED_DAYS_MASK, targetSeconds = DEFAULT_TARGET_SECONDS))
+
+        coordinator.ensureBibleReminderScheduled(enabledDay)
+
+        assertTrue(shadowOf(alarmManager).getScheduledAlarms().isNotEmpty())
+    }
+
+    @Test
+    fun ensureBibleReminderScheduled_withNoConfigSavedYet_schedulesNothing_andDoesNotCrash() = runTest {
+        coordinator.ensureBibleReminderScheduled(enabledDay)
+
+        assertTrue(shadowOf(alarmManager).getScheduledAlarms().isEmpty())
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.scheduling.NudgeSchedulingCoordinatorTest" --rerun-tasks 2>&1 | tail -40`
+
+Expected: compile error — `Unresolved reference 'ensureBibleReminderScheduled'`.
+
+- [ ] **Step 3: Add `ensureBibleReminderScheduled` to `NudgeSchedulingCoordinator`**
+
+Replace the full content of `app/src/main/java/com/example/readbook/scheduling/NudgeSchedulingCoordinator.kt`:
+
+```kotlin
+package com.example.readbook.scheduling
+
+import com.example.readbook.data.ReadingConfigDao
+import java.time.LocalDate
+
+/**
+ * Shared self-heal entry point used by [BootReceiver], [RolloverReceiver], and app-open —
+ * "does today have its alarms scheduled? If not, schedule them" — so nudges recover even if
+ * the midnight rollover job never got to run (OEM battery killers, missed boot, etc.).
+ */
+class NudgeSchedulingCoordinator(
+    private val readingConfigDao: ReadingConfigDao,
+    private val scheduler: NudgeScheduler,
+) {
+    suspend fun ensureScheduled(date: LocalDate) {
+        val config = readingConfigDao.getConfig() ?: return // no config saved yet — nothing to schedule
+        scheduler.scheduleNudgesForToday(date, config)
+    }
+
+    suspend fun ensureBibleReminderScheduled(date: LocalDate) {
+        val config = readingConfigDao.getConfig() ?: return
+        scheduler.scheduleBibleReminderHoursForToday(date, config)
+    }
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.scheduling.NudgeSchedulingCoordinatorTest" --rerun-tasks 2>&1 | tail -40`
+
+Expected: `BUILD SUCCESSFUL`, all 4 tests pass.
+
+- [ ] **Step 5: Write the failing test — update `BootReceiverTest`'s alarm count**
+
+Open `app/src/test/java/com/example/readbook/scheduling/BootReceiverTest.kt`. No new override is needed — `BootReceiver` already has `coordinatorOverride`, and the new call goes through the same coordinator instance the test already constructs. Update the alarm-count assertion:
 
 ```kotlin
     @Test
@@ -1957,7 +2299,6 @@ Open `app/src/test/java/com/example/readbook/scheduling/BootReceiverTest.kt`. `B
         receiver.today = { today }
         receiver.coordinatorOverride = coordinator
         receiver.schedulerOverride = scheduler
-        receiver.readingConfigDaoOverride = db.readingConfigDao()
         receiver.scopeOverride = CoroutineScope(StandardTestDispatcher(testScheduler))
 
         dispatch(receiver, Intent.ACTION_BOOT_COMPLETED)
@@ -1970,69 +2311,41 @@ Open `app/src/test/java/com/example/readbook/scheduling/BootReceiverTest.kt`. `B
     }
 ```
 
-(only the comment and the final assertion number change: `7` becomes `12`, plus the new `receiver.readingConfigDaoOverride = db.readingConfigDao()` line.)
+(only the comment and the final assertion number change: `7` becomes `12` — no other changes to this test.)
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 6: Run test to verify it fails**
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.scheduling.BootReceiverTest" --rerun-tasks 2>&1 | tail -40`
 
-Expected: compile error — `Unresolved reference 'readingConfigDaoOverride'`.
+Expected: `onBootCompleted_reSchedulesTodaysNudges_andTheRolloverChain` FAILS — `expected:<12> but was:<7>` (`BootReceiver` doesn't call `ensureBibleReminderScheduled` yet).
 
-- [ ] **Step 3: Add the override seam and wire `BootReceiver`**
+- [ ] **Step 7: Wire `BootReceiver`**
 
-In `app/src/main/java/com/example/readbook/scheduling/BootReceiver.kt`, add this import:
-
-```kotlin
-import com.example.readbook.data.ReadingConfigDao
-```
-
-Add the new overridable field alongside the existing ones:
+In `app/src/main/java/com/example/readbook/scheduling/BootReceiver.kt`, update the `try` block inside `onReceive` — one new line, no new fields, no new imports:
 
 ```kotlin
-    internal var today: () -> LocalDate = { LocalDate.now() }
-    internal var coordinatorOverride: NudgeSchedulingCoordinator? = null
-    internal var schedulerOverride: NudgeScheduler? = null
-    internal var readingConfigDaoOverride: ReadingConfigDao? = null
-    internal var scopeOverride: CoroutineScope? = null
-```
-
-Update `onReceive` to obtain the DAO the same way `coordinator`/`scheduler` already are, and use it inside the `try` block:
-
-```kotlin
-    override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
-        val pendingResult = goAsync()
-        val container = (context.applicationContext as ReadingApp).container
-        val coordinator = coordinatorOverride ?: container.nudgeSchedulingCoordinator
-        val scheduler = schedulerOverride ?: container.nudgeScheduler
-        val readingConfigDao = readingConfigDaoOverride ?: container.readingConfigDao
-        val scope = scopeOverride ?: CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        scope.launch {
             try {
                 val date = today()
                 coordinator.ensureScheduled(date)
+                coordinator.ensureBibleReminderScheduled(date)
                 scheduler.scheduleRollover(from = date)
                 scheduler.scheduleWeeklySummary(from = date)
-                val config = readingConfigDao.getConfig()
-                if (config != null) {
-                    scheduler.scheduleBibleReminderHoursForToday(date, config)
-                }
             } catch (e: Exception) {
                 // Never let a boot-time failure crash the receiver — next app-open self-heals.
             } finally {
                 pendingResult.finish()
             }
-        }
-    }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 8: Run test to verify it passes**
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.scheduling.BootReceiverTest" --rerun-tasks 2>&1 | tail -40`
 
-Expected: `BUILD SUCCESSFUL`, both tests pass. (`onReceive_ignoresIntentsThatAreNotBootCompleted` doesn't need `readingConfigDaoOverride` set — it dispatches a non-boot action, which returns before any DAO/container access happens at all.)
+Expected: `BUILD SUCCESSFUL`, both tests pass.
 
-- [ ] **Step 5: Wire `ReadingApp.onCreate()`**
+- [ ] **Step 9: Wire `ReadingApp.onCreate()`, and warm the schedule parse off the main thread**
+
+`container.tanakhSchedule` (Task 4) is a `lazy` property — the first thing to touch it today would be `MainActivity.onCreate()` (Task 7), synchronously, on the main thread. Touching it here first, inside the app's existing background-coroutine self-heal, means the ~30KB parse happens on `Dispatchers.Default` before `MainActivity` ever needs it.
 
 Replace the full content of `app/src/main/java/com/example/readbook/ReadingApp.kt`:
 
@@ -2062,24 +2375,23 @@ class ReadingApp : Application() {
         // today's nudges, the rollover chain, the weekly summary alarm, and the bible reading
         // reminder alarms are all scheduled even if the midnight/boot jobs never got to run (OEM
         // battery killers, a missed boot receiver, etc.) — not solely reliant on any single
-        // scheduling path.
+        // scheduling path. Also warms container.tanakhSchedule here (off the main thread) so
+        // MainActivity's first access to it doesn't do a synchronous asset parse on the UI thread.
         appScope.launch {
             ensureConfigSeeded(container.readingConfigDao)
             container.readingTimerRepository.reconcileCrashedSession()
+            container.tanakhSchedule
             val today = LocalDate.now()
             container.nudgeSchedulingCoordinator.ensureScheduled(today)
+            container.nudgeSchedulingCoordinator.ensureBibleReminderScheduled(today)
             container.nudgeScheduler.scheduleRollover(from = today)
             container.nudgeScheduler.scheduleWeeklySummary(from = today)
-            val config = container.readingConfigDao.getConfig()
-            if (config != null) {
-                container.nudgeScheduler.scheduleBibleReminderHoursForToday(today, config)
-            }
         }
     }
 }
 ```
 
-- [ ] **Step 6: Run the full test suite**
+- [ ] **Step 10: Run the full test suite**
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest assembleDebug --rerun-tasks 2>&1 | tail -30`
 
@@ -2089,21 +2401,28 @@ Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && total=0; failed=0; for f i
 
 Expected: `FAILED=0`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 cd "D:/Users/zivk/Documents/GitHub/ReadBook"
 git add \
+  app/src/main/java/com/example/readbook/scheduling/NudgeSchedulingCoordinator.kt \
+  app/src/test/java/com/example/readbook/scheduling/NudgeSchedulingCoordinatorTest.kt \
   app/src/main/java/com/example/readbook/ReadingApp.kt \
   app/src/main/java/com/example/readbook/scheduling/BootReceiver.kt \
   app/src/test/java/com/example/readbook/scheduling/BootReceiverTest.kt
 git commit -m "$(cat <<'EOF'
 Wire the Bible reminder alarms into app-open/boot self-heal
 
-Same two sites the weekly summary alarm uses (ReadingApp.onCreate,
-BootReceiver) - RolloverReceiver is intentionally left alone, matching
-its existing behavior (it doesn't self-heal the weekly summary alarm
-either).
+Adds NudgeSchedulingCoordinator.ensureBibleReminderScheduled(), the
+same shared-entry-point shape as the existing ensureScheduled(), so
+ReadingApp.onCreate() and BootReceiver call one method each rather
+than duplicating a config-fetch+null-check by hand in both places.
+Also warms container.tanakhSchedule from ReadingApp's background
+coroutine so MainActivity's first access doesn't parse the CSV asset
+synchronously on the main thread. RolloverReceiver is intentionally
+left alone, matching its existing behavior (it doesn't self-heal the
+weekly summary alarm either).
 EOF
 )"
 ```
@@ -2145,25 +2464,27 @@ $LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe logcat -d -t 200 | grep -iE "re
 
 Expected: no output.
 
-- [ ] **Step 4: Verify the Home screen card's four states**
+- [ ] **Step 4: Verify the Home screen card's four states, layout, and no clipping**
 
-On the Home screen, confirm the new card appears below the timer content, showing the first unread chapter (יהושע י״ט, unless you've already made progress from earlier testing) with an enabled "קראתי" button and no message (OnSchedule state, assuming today is on/after 14.6.2026 — if today is before that date, it'll show the Waiting state instead with "נחזור לקרוא ב 14.6.2026" and a disabled button, which is also correct — confirm whichever state actually applies).
+On the Home screen, confirm the new card appears below the timer content, showing the first unread chapter (יהושע י״ט, unless you've already made progress from earlier testing) with an enabled "קראתי" button and no message (OnSchedule state, assuming today is on/after 14.6.2026 — if today is before that date, it'll show the Waiting state instead with "נחזור לקרוא ב" and the date, and a disabled button, which is also correct — confirm whichever state actually applies). Confirm the date in that message reads in the correct digit order (`14.6.2026`, not reversed or reordered) — this is the bidi-isolation fix from Task 5. If notifications are denied, confirm the red `NotificationsOffBanner` plus both card sections together don't clip any content — scroll down if needed and confirm the scroll actually works.
 
-- [ ] **Step 5: Verify pressing the button advances the cursor**
+- [ ] **Step 5: Verify pressing the button advances the cursor, and the undo snackbar**
 
-Tap "קראתי". Confirm the card updates to show the next chapter. If you're behind schedule (today's actual date is well past 14.6.2026), confirm the "אתה בפיגור של N פרקים" message appears with a plausible N, and that N decreases by exactly 1 each time you tap the button again.
+Tap "קראתי". Confirm a snackbar appears with a "בטל" (undo) action, and the card updates to show the next chapter — confirm the button's on-screen position did not jump around relative to the timer content above it. If you're behind schedule (today's actual date is well past 14.6.2026), confirm the "אתה בפיגור של N פרקים" message appears in a visibly different color than the neutral waiting message, with a plausible N, and that N decreases by exactly 1 each time you tap the button again.
+
+Tap "קראתי" once more, then tap the snackbar's "בטל" action before it dismisses. Confirm the card reverts to showing the previous chapter again (the undo actually took effect).
 
 - [ ] **Step 6: Verify the waiting state's disabled button**
 
 Keep tapping "קראתי" until the card shows a future-dated chapter (message starting with "נחזור לקרוא ב"). Confirm the button is visibly disabled and tapping it does nothing.
 
-- [ ] **Step 7: Verify the reminder notification**
+- [ ] **Step 7: Verify the reminder notification, its tap target, and no duplicate Activity**
 
 ```bash
 $LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe shell am broadcast -n com.example.readbook/.scheduling.BibleReadingReminderReceiver -a com.example.readbook.action.BIBLE_REMINDER
 ```
 
-If the card was showing an enabled button just before this (a chapter is due), pull down the notification shade and confirm a "Bible reading reminder" notification appears showing the chapter. Tap it and confirm it opens the app directly to the Home screen. If the card was showing the disabled/waiting state instead, confirm no notification appears — re-run Step 5 first to get back into a due state, then retry this step.
+If the card was showing an enabled button just before this (a chapter is due), pull down the notification shade and confirm a "Bible reading reminder" notification appears showing the chapter. Press the Home button (backgrounding the app, not closing it) before tapping the notification, then tap it — confirm it resumes the existing `MainActivity` instance rather than stacking a second one (press the back button afterward; you should exit the app, not land on a duplicate Home screen). If the card was showing the disabled/waiting state instead, confirm no notification appears — re-run Step 5 first to get back into a due state, then retry this step.
 
 - [ ] **Step 8: Check logcat for crashes across all of the above**
 
@@ -2175,4 +2496,4 @@ Expected: no output.
 
 - [ ] **Step 9: Report results to the user**
 
-Summarize which parts were confirmed working on-device (migration/upgrade, all four card states, the reminder notification and its tap target), and flag anything that didn't behave as expected for follow-up before considering this plan complete.
+Summarize which parts were confirmed working on-device (migration/upgrade, all four card states, layout/scroll/button-stability, the undo snackbar, the reminder notification and its tap target/back-stack behavior), and flag anything that didn't behave as expected for follow-up before considering this plan complete.
