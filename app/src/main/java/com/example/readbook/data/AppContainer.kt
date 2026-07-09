@@ -12,6 +12,7 @@ class AppContainer(context: Context) {
         Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "readbook.db")
             // Never fallbackToDestructiveMigration() — the entire point of this schema is
             // long-term reading history; add a real Migration when the schema ever changes.
+            .addMigrations(AppDatabase.MIGRATION_1_2)
             .build()
     }
 
@@ -19,6 +20,7 @@ class AppContainer(context: Context) {
     val dailyProgressDao get() = db.dailyProgressDao()
     val readingSessionDao get() = db.readingSessionDao()
     val statsDao get() = db.statsDao()
+    val bibleReadingProgressDao get() = db.bibleReadingProgressDao()
 
     val readingTimerRepository: ReadingTimerRepository by lazy {
         ReadingTimerRepository(

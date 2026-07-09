@@ -42,6 +42,15 @@ android {
     buildFeatures {
         compose = true
     }
+    sourceSets {
+        // Robolectric unit tests read assets via this project's mergeDebugAssets output (see
+        // android_merged_assets in build/intermediates/unit_test_config_directory), not a
+        // separate test-only asset merge - so MigrationTestHelper's schema JSON lookup needs
+        // room.schemaLocation on the debug variant's assets, not the "test" source set.
+        getByName("debug") {
+            assets.srcDirs("$projectDir/schemas")
+        }
+    }
 }
 
 kotlin {
