@@ -45,7 +45,12 @@ class MainActivity : ComponentActivity() {
         val container = (application as ReadingApp).container
         homeViewModel = ViewModelProvider(
             this,
-            HomeViewModelFactory(container.dailyProgressDao, container.readingConfigDao, container.readingTimerRepository),
+            HomeViewModelFactory(
+                container.dailyProgressDao,
+                container.readingConfigDao,
+                container.readingTimerRepository,
+                container.bibleReadingRepository,
+            ),
         )[HomeViewModel::class.java]
 
         val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
@@ -62,12 +67,16 @@ class MainActivity : ComponentActivity() {
                 when (screen) {
                     Screen.HOME -> {
                         val uiState by homeViewModel.uiState.collectAsStateWithLifecycle()
+                        val bibleReadingUiState by homeViewModel.bibleReadingUiState.collectAsStateWithLifecycle()
                         HomeScreen(
                             uiState = uiState,
+                            bibleReadingUiState = bibleReadingUiState,
                             onToggleTimer = { homeViewModel.onToggleTimer(this) },
                             onOpenSettings = { screen = Screen.SETTINGS },
                             onOpenHistory = { screen = Screen.HISTORY },
                             onResetToday = { homeViewModel.onResetToday() },
+                            onMarkChapterRead = { homeViewModel.onMarkChapterRead() },
+                            onUndoMarkChapterRead = { homeViewModel.onUndoMarkChapterRead() },
                         )
                     }
                     Screen.HISTORY -> {
