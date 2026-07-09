@@ -16,4 +16,9 @@ class NudgeSchedulingCoordinator(
         val config = readingConfigDao.getConfig() ?: return // no config saved yet — nothing to schedule
         scheduler.scheduleNudgesForToday(date, config)
     }
+
+    suspend fun ensureBibleReminderScheduled(date: LocalDate) {
+        val config = readingConfigDao.getConfig() ?: return
+        scheduler.scheduleBibleReminderHoursForToday(date, config)
+    }
 }

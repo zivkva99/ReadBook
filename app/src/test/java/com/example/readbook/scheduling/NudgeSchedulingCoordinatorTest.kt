@@ -65,4 +65,20 @@ class NudgeSchedulingCoordinatorTest {
 
         assertTrue(shadowOf(alarmManager).getScheduledAlarms().isEmpty())
     }
+
+    @Test
+    fun ensureBibleReminderScheduled_withSavedConfig_schedulesReminderHours() = runTest {
+        db.readingConfigDao().upsert(ReadingConfig(enabledDaysMask = DEFAULT_ENABLED_DAYS_MASK, targetSeconds = DEFAULT_TARGET_SECONDS))
+
+        coordinator.ensureBibleReminderScheduled(enabledDay)
+
+        assertTrue(shadowOf(alarmManager).getScheduledAlarms().isNotEmpty())
+    }
+
+    @Test
+    fun ensureBibleReminderScheduled_withNoConfigSavedYet_schedulesNothing_andDoesNotCrash() = runTest {
+        coordinator.ensureBibleReminderScheduled(enabledDay)
+
+        assertTrue(shadowOf(alarmManager).getScheduledAlarms().isEmpty())
+    }
 }

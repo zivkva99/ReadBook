@@ -20,14 +20,18 @@ class ReadingApp : Application() {
         // saves one until a Settings screen exists), reconciles a session left dangling by a
         // process kill (the foreground service dies with the process — activeSessionStartedAt
         // would otherwise sit stuck forever with no service left to ever finish it), then ensures
-        // today's nudges, the rollover chain, and the weekly summary alarm are all scheduled even
-        // if the midnight/boot jobs never got to run (OEM battery killers, a missed boot
-        // receiver, etc.) — not solely reliant on any single scheduling path.
+        // today's nudges, the rollover chain, the weekly summary alarm, and the bible reading
+        // reminder alarms are all scheduled even if the midnight/boot jobs never got to run (OEM
+        // battery killers, a missed boot receiver, etc.) — not solely reliant on any single
+        // scheduling path. Also warms container.tanakhSchedule here (off the main thread) so
+        // MainActivity's first access to it doesn't do a synchronous asset parse on the UI thread.
         appScope.launch {
             ensureConfigSeeded(container.readingConfigDao)
             container.readingTimerRepository.reconcileCrashedSession()
+            container.tanakhSchedule
             val today = LocalDate.now()
             container.nudgeSchedulingCoordinator.ensureScheduled(today)
+            container.nudgeSchedulingCoordinator.ensureBibleReminderScheduled(today)
             container.nudgeScheduler.scheduleRollover(from = today)
             container.nudgeScheduler.scheduleWeeklySummary(from = today)
         }

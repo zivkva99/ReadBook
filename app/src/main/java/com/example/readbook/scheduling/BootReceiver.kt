@@ -33,6 +33,7 @@ class BootReceiver : BroadcastReceiver() {
             try {
                 val date = today()
                 coordinator.ensureScheduled(date)
+                coordinator.ensureBibleReminderScheduled(date)
                 scheduler.scheduleRollover(from = date)
                 scheduler.scheduleWeeklySummary(from = date)
             } catch (e: Exception) {
