@@ -181,13 +181,17 @@ EOF
 - Create: `app/src/main/java/com/example/readbook/data/BibleReadingProgressDao.kt`
 - Modify: `app/src/main/java/com/example/readbook/data/AppDatabase.kt`
 - Modify: `app/src/main/java/com/example/readbook/data/AppContainer.kt`
+- Modify: `app/build.gradle.kts`
 - Test: `app/src/test/java/com/example/readbook/data/BibleReadingProgressDaoTest.kt`
+- Test: `app/src/test/java/com/example/readbook/data/AppDatabaseMigrationTest.kt`
 
 **Interfaces:**
 - Consumes: nothing new.
 - Produces: `BibleReadingProgressDao` (`suspend fun getProgress(): BibleReadingProgress?`, `fun observeProgress(): Flow<BibleReadingProgress?>`, `suspend fun upsert(progress: BibleReadingProgress)`) — used by Task 4 (`BibleReadingRepository`). `AppContainer.bibleReadingProgressDao` — used by Tasks 4 and 6.
 
-**Migration testing:** the DAO test below uses `Room.inMemoryDatabaseBuilder`, which builds fresh from the current entity definitions and does not exercise the migration path itself (in-memory DBs have no prior version to migrate from). The migration path is verified two ways instead: Step 8 adds an automated test using Room's `MigrationTestHelper` against the schema already exported to `app/schemas/com.example.readbook.data.AppDatabase/1.json` (this works as a plain Robolectric/JVM test — no instrumentation needed — confirmed by inspecting the actual `room-testing` 2.7.1 class file rather than assumed), and Task 11's on-device upgrade-install pass additionally confirms it against the real installed app with real accumulated history. Belt and suspenders for the one change in this plan where a mistake could lose real data.
+**Migration testing:** the DAO test below uses `Room.inMemoryDatabaseBuilder`, which builds fresh from the current entity definitions and does not exercise the migration path itself (in-memory DBs have no prior version to migrate from). The migration path is verified two ways instead: Step 8 adds an automated test using Room's `MigrationTestHelper` against the exported schema, and Task 11's on-device upgrade-install pass additionally confirms it against the real installed app with real accumulated history. Belt and suspenders for the one change in this plan where a mistake could lose real data.
+
+**Verified by actually running it, not just reading the API**: `MigrationTestHelper`'s constructor/method signatures work exactly as expected (confirmed against the real `room-testing-android-2.7.1.aar` class file). But running it the first time surfaced a real, separate gap Step 8 now fixes: `MigrationTestHelper.createDatabase()`/`runMigrationsAndValidate()` load the exported schema JSON as a Robolectric **asset**, and this project's unit tests resolve assets via `mergeDebugAssets` (confirmed by reading `build/intermediates/unit_test_config_directory/debugUnitTest/generateDebugUnitTestConfig`'s `android_merged_assets` value) — the **debug/main** source set's assets, not a `test`-only source set (a `sourceSets { getByName("test") { assets.srcDirs(...) } }` attempt was tried first and silently had no effect). The fix: point the **debug** source set's assets at `app/schemas/` directly, so every exported schema version is automatically available with no manual copying, ever.
 
 - [ ] **Step 1: Write the failing DAO test**
 
@@ -412,7 +416,7 @@ Expected: `BUILD SUCCESSFUL`, all 4 tests pass.
 
 - [ ] **Step 8: Add an automated migration test**
 
-This validates that `MIGRATION_1_2` (Step 5) actually applies cleanly to a real v1 database with existing data — using Room's `MigrationTestHelper` against the schema already exported to `app/schemas/com.example.readbook.data.AppDatabase/1.json` (exported by the `ksp { arg("room.schemaLocation", ...) }` config already in `app/build.gradle.kts`). This is a real JVM/Robolectric test, not instrumented — verified against the actual `room-testing-android-2.7.1` class file, which still exposes the classic `MigrationTestHelper(Instrumentation, Class<RoomDatabase>)` constructor and `createDatabase`/`runMigrationsAndValidate(String, Int, ...)` methods `room-testing` is already a `testImplementation` dependency, no new library needed.
+This validates that `MIGRATION_1_2` (Step 5) actually applies cleanly to a real v1 database with existing data — using Room's `MigrationTestHelper` against the schema already exported to `app/schemas/com.example.readbook.data.AppDatabase/1.json` (exported by the `ksp { arg("room.schemaLocation", ...) }` config already in `app/build.gradle.kts`). This is a real JVM/Robolectric test, not instrumented — verified against the actual `room-testing-android-2.7.1` class file, which still exposes the classic `MigrationTestHelper(Instrumentation, Class<RoomDatabase>)` constructor and `createDatabase`/`runMigrationsAndValidate(String, Int, ...)` methods. `room-testing` is already a `testImplementation` dependency, no new library needed. (It does need one build config fix, in Step 9 below — found by actually running this, not from reading the API alone.)
 
 Create `app/src/test/java/com/example/readbook/data/AppDatabaseMigrationTest.kt`:
 
@@ -467,15 +471,39 @@ class AppDatabaseMigrationTest {
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.data.AppDatabaseMigrationTest" --rerun-tasks 2>&1 | tail -40`
 
+Expected at this point: **FAILS** with `java.io.FileNotFoundException: Cannot find the schema file in the assets folder. ... Missing file: com.example.readbook.data.AppDatabase/1.json`. This is not a mistake in the test — `MigrationTestHelper` loads the exported schema JSON as a Robolectric asset at runtime, and it isn't wired into any asset source set yet. Fixed in the next step.
+
+- [ ] **Step 9: Wire the exported schemas into the debug source set's assets**
+
+Robolectric resolves assets for this project's unit tests via `mergeDebugAssets` (visible in `app/build/intermediates/unit_test_config_directory/debugUnitTest/generateDebugUnitTestConfig`'s `android_merged_assets` value) — the **debug** source set, not a `test`-only one (a `sourceSets { getByName("test") {...} }` version of this fix has no effect here — confirmed by trying it). Point the debug source set's assets at `app/schemas/` directly, so every exported schema version (both `1.json` and the new `2.json` this task adds) is available automatically, with no manual copying ever.
+
+In `app/build.gradle.kts`, add a `sourceSets` block inside the `android { ... }` block, right after `buildFeatures`:
+
+```kotlin
+    sourceSets {
+        // Robolectric unit tests read assets via this project's mergeDebugAssets output (see
+        // android_merged_assets in build/intermediates/unit_test_config_directory), not a
+        // separate test-only asset merge - so MigrationTestHelper's schema JSON lookup needs
+        // room.schemaLocation on the debug variant's assets, not the "test" source set.
+        getByName("debug") {
+            assets.srcDirs("$projectDir/schemas")
+        }
+    }
+```
+
+- [ ] **Step 10: Run test to verify it passes**
+
+Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --tests "com.example.readbook.data.AppDatabaseMigrationTest" --rerun-tasks 2>&1 | tail -40`
+
 Expected: `BUILD SUCCESSFUL` — the migration applies to a populated v1 database, the pre-existing `reading_config` row survives untouched, and the new `bible_reading_progress` table exists and is queryable. This is concrete evidence, not just eyeballing the SQL, that upgrading a real installed copy of the app won't lose the user's existing reading history.
 
-- [ ] **Step 9: Run the full suite to confirm nothing else broke**
+- [ ] **Step 11: Run the full suite to confirm nothing else broke**
 
 Run: `cd "D:/Users/zivk/Documents/GitHub/ReadBook" && ./gradlew testDebugUnitTest --rerun-tasks 2>&1 | tail -30`
 
-Expected: `BUILD SUCCESSFUL`.
+Expected: `BUILD SUCCESSFUL`. (Confirmed: 138 tests, 0 failures, when this task was actually executed.)
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 cd "D:/Users/zivk/Documents/GitHub/ReadBook"
@@ -484,6 +512,8 @@ git add \
   app/src/main/java/com/example/readbook/data/BibleReadingProgressDao.kt \
   app/src/main/java/com/example/readbook/data/AppDatabase.kt \
   app/src/main/java/com/example/readbook/data/AppContainer.kt \
+  app/build.gradle.kts \
+  app/schemas/com.example.readbook.data.AppDatabase/2.json \
   app/src/test/java/com/example/readbook/data/BibleReadingProgressDaoTest.kt \
   app/src/test/java/com/example/readbook/data/AppDatabaseMigrationTest.kt
 git commit -m "$(cat <<'EOF'
@@ -492,7 +522,9 @@ Add BibleReadingProgress entity, DAO, and the app's first Room migration
 Single-row cursorIndex table tracking the next unread Tanakh chapter,
 same singleton pattern as ReadingConfig. version 1->2 with a real
 Migration, never fallbackToDestructiveMigration(), verified with an
-automated MigrationTestHelper test against the exported v1 schema.
+automated MigrationTestHelper test against the exported schema -
+wired the debug source set's assets to app/schemas/ so Robolectric can
+actually load it (mergeDebugAssets, not a test-only asset merge).
 EOF
 )"
 ```
