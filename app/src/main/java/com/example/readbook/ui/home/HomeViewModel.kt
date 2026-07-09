@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.readbook.data.BibleReadingRepository
 import com.example.readbook.data.Clock
 import com.example.readbook.data.DailyProgressDao
 import com.example.readbook.data.ReadingConfigDao
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -22,6 +24,7 @@ class HomeViewModel(
     dailyProgressDao: DailyProgressDao,
     readingConfigDao: ReadingConfigDao,
     private val repository: ReadingTimerRepository,
+    private val bibleReadingRepository: BibleReadingRepository,
     private val clock: Clock = SystemClock,
     private val today: () -> LocalDate = { LocalDate.now() },
 ) : ViewModel() {
@@ -46,6 +49,18 @@ class HomeViewModel(
         HomeUiState.NotConfigured(notificationsDenied = false),
     )
 
+    val bibleReadingUiState: StateFlow<BibleReadingUiState> = bibleReadingRepository
+        .observeStatus(today)
+        .map(::deriveBibleReadingUiState)
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            BibleReadingUiState(
+                chapterText = null, buttonEnabled = false,
+                message = null, messageIsUrgent = false, finished = false,
+            ),
+        )
+
     /** No-op from [HomeUiState.NotConfigured] or [HomeUiState.Done] — nothing to toggle there. */
     fun onToggleTimer(context: Context) {
         val action = when (val state = uiState.value) {
@@ -65,6 +80,20 @@ class HomeViewModel(
     fun onResetToday() {
         viewModelScope.launch {
             repository.resetToday(today())
+        }
+    }
+
+    fun onMarkChapterRead() {
+        viewModelScope.launch {
+            bibleReadingRepository.markRead()
+        }
+    }
+
+    /** Backs the Home screen's short-lived "undo" action — markRead() is otherwise the one
+     * unrecoverable action in this feature. */
+    fun onUndoMarkChapterRead() {
+        viewModelScope.launch {
+            bibleReadingRepository.undoMarkRead()
         }
     }
 }

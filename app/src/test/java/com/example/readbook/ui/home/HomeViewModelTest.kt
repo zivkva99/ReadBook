@@ -5,12 +5,16 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.readbook.data.AppDatabase
+import com.example.readbook.data.BibleReadingProgress
+import com.example.readbook.data.BibleReadingRepository
+import com.example.readbook.data.BibleReadingStatus
 import com.example.readbook.data.Clock
 import com.example.readbook.data.DEFAULT_ENABLED_DAYS_MASK
 import com.example.readbook.data.DEFAULT_TARGET_SECONDS
 import com.example.readbook.data.DailyProgress
 import com.example.readbook.data.ReadingConfig
 import com.example.readbook.data.ReadingTimerRepository
+import com.example.readbook.data.ScheduleEntry
 import com.example.readbook.service.ReadingTimerService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -39,6 +43,11 @@ class HomeViewModelTest {
 
     private val context = ApplicationProvider.getApplicationContext<Context>()
 
+    private val testSchedule = listOf(
+        ScheduleEntry("יהושע", "י״ט", LocalDate.of(2026, 7, 5)),
+        ScheduleEntry("יהושע", "כ׳", LocalDate.of(2026, 7, 6)),
+    )
+
     // HomeViewModel uses viewModelScope (Dispatchers.Main.immediate) internally, and Room's
     // generated DAOs hop to their own internal executor by default — both must be pinned to
     // this test's own StandardTestDispatcher(testScheduler), or their work escapes the virtual
@@ -55,10 +64,12 @@ class HomeViewModelTest {
             statsDao = db.statsDao(),
             clock = clock,
         )
+        val bibleReadingRepository = BibleReadingRepository(db.bibleReadingProgressDao(), testSchedule)
         val viewModel = HomeViewModel(
             dailyProgressDao = db.dailyProgressDao(),
             readingConfigDao = db.readingConfigDao(),
             repository = repository,
+            bibleReadingRepository = bibleReadingRepository,
             clock = clock,
             today = { today },
         )
@@ -184,6 +195,54 @@ class HomeViewModelTest {
 
         val row = db.dailyProgressDao().getByDate(today.toString())
         assertEquals(DEFAULT_TARGET_SECONDS, row?.remainingSeconds)
+
+        db.close()
+    }
+
+    @Test
+    fun bibleReadingUiState_reflectsOnScheduleStatus() = runTest {
+        val (viewModel, db) = buildViewModel(FakeClock(), LocalDate.of(2026, 7, 5))
+        testScheduler.runCurrent()
+
+        val state = viewModel.bibleReadingUiState.value
+
+        assertEquals("יהושע י״ט", state.chapterText)
+        assertEquals(true, state.buttonEnabled)
+
+        db.close()
+    }
+
+    @Test
+    fun onMarkChapterRead_advancesTheCursor_andUiStateReflectsIt() = runTest {
+        val (viewModel, db) = buildViewModel(FakeClock(), LocalDate.of(2026, 7, 5))
+        testScheduler.runCurrent()
+
+        viewModel.onMarkChapterRead()
+        testScheduler.runCurrent()
+
+        // Cursor now points at schedule[1] (2026-7-6), but "today" is still 2026-7-5 - the
+        // post-condition here is Waiting, not OnSchedule, so the button must be disabled.
+        // Asserting only chapterText would pass even if buttonEnabled were wrongly left true.
+        val state = viewModel.bibleReadingUiState.value
+        assertEquals("כ׳", state.chapterText?.substringAfter(" "))
+        assertEquals(false, state.buttonEnabled)
+
+        db.close()
+    }
+
+    @Test
+    fun onUndoMarkChapterRead_reversesTheCursorAdvance() = runTest {
+        val (viewModel, db) = buildViewModel(FakeClock(), LocalDate.of(2026, 7, 5))
+        testScheduler.runCurrent()
+        viewModel.onMarkChapterRead()
+        testScheduler.runCurrent()
+
+        viewModel.onUndoMarkChapterRead()
+        testScheduler.runCurrent()
+
+        val state = viewModel.bibleReadingUiState.value
+        assertEquals("י״ט", state.chapterText?.substringAfter(" "))
+        assertEquals(true, state.buttonEnabled)
 
         db.close()
     }
