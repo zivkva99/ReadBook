@@ -580,11 +580,16 @@ class BibleReadingStatusTest {
     }
 
     @Test
-    fun oneDayBehind_yieldsBehindWithDueCountOne() {
-        // Cursor still on Tuesday's chapter, but it's now Wednesday and no new chapter is due yet.
+    fun oneDayBehind_midWeek_dueCountIncludesTodaysNewlyDueChapter() {
+        // Cursor still on Tuesday's chapter; today is Wednesday, so Wednesday's own chapter has
+        // also become due - dueCount counts both the overdue Tuesday one and today's Wednesday one.
+        // (Caught by actually running this test: the original version of this test asserted
+        // dueCount = 1, which was simply wrong - inconsistent with severalDaysBehind's own
+        // dueCount formula below, which correctly counts every due-but-unread chapter inclusive
+        // of "today's own" chapter, not just strictly-prior ones.)
         val status = deriveBibleReadingStatus(schedule, cursorIndex = 2, today = LocalDate.of(2026, 7, 8))
 
-        assertEquals(BibleReadingStatus.Behind(schedule[2], dueCount = 1), status)
+        assertEquals(BibleReadingStatus.Behind(schedule[2], dueCount = 2), status)
     }
 
     @Test
