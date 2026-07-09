@@ -8,8 +8,10 @@ import com.example.readbook.scheduling.NudgeSchedulingCoordinator
 /** Manual DI — no framework needed at this app's size. One instance, owned by [com.example.readbook.ReadingApp]. */
 class AppContainer(context: Context) {
 
+    private val appContext = context.applicationContext
+
     private val db: AppDatabase by lazy {
-        Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "readbook.db")
+        Room.databaseBuilder(appContext, AppDatabase::class.java, "readbook.db")
             // Never fallbackToDestructiveMigration() — the entire point of this schema is
             // long-term reading history; add a real Migration when the schema ever changes.
             .addMigrations(AppDatabase.MIGRATION_1_2)
@@ -32,9 +34,24 @@ class AppContainer(context: Context) {
         )
     }
 
-    val nudgeScheduler: NudgeScheduler by lazy { NudgeScheduler(context.applicationContext) }
+    val nudgeScheduler: NudgeScheduler by lazy { NudgeScheduler(appContext) }
 
     val nudgeSchedulingCoordinator: NudgeSchedulingCoordinator by lazy {
         NudgeSchedulingCoordinator(readingConfigDao = readingConfigDao, scheduler = nudgeScheduler)
+    }
+
+    /** Falls back to an empty schedule (never throws) if the bundled asset is ever missing or
+     * malformed — see this step's note on why a crash here must not take down the whole app. */
+    val tanakhSchedule: List<ScheduleEntry> by lazy {
+        try {
+            val csvText = appContext.assets.open("tanakh_schedule.csv").bufferedReader().use { it.readText() }
+            parseTanakhSchedule(csvText)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    val bibleReadingRepository: BibleReadingRepository by lazy {
+        BibleReadingRepository(dao = bibleReadingProgressDao, schedule = tanakhSchedule)
     }
 }
