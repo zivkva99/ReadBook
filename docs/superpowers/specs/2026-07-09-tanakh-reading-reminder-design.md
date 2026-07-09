@@ -80,13 +80,16 @@ chapter always means "the current one," never "whatever's scheduled for today":
   notification on a **new channel** ("Bible reading reminder") showing the chapter
   (e.g. "יהושע י״ט"). **No action buttons** — tapping opens `MainActivity` only; marking
   read happens on the in-app button, per explicit decision.
-- **Self-heal**: the app has exactly one self-heal entry point today,
-  `NudgeSchedulingCoordinator.ensureScheduled(date)`, called from three places —
-  `ReadingApp.kt` (app-open), `BootReceiver.kt` (boot), `RolloverReceiver.kt` (midnight
-  rollover) — the same three sites `scheduler.scheduleWeeklySummary(from = today)` was
-  wired into for the weekly summary feature. The Bible reminder's alarm-(re)arming call
-  is added at those same three sites, no new receiver classes needed for self-heal
-  itself.
+- **Self-heal**: the app has one self-heal entry point, `NudgeSchedulingCoordinator
+  .ensureScheduled(date)`, called from three places — `ReadingApp.kt` (app-open),
+  `BootReceiver.kt` (boot), `RolloverReceiver.kt` (midnight rollover). The weekly
+  summary alarm, however, is only re-armed from two of those three —
+  `ReadingApp.onCreate()` and `BootReceiver` — `RolloverReceiver` calls `ensureScheduled`
+  and `scheduleRollover` only, not `scheduleWeeklySummary` (verified by reading the
+  current source; not a hypothetical). The Bible reminder follows the weekly summary's
+  actual pattern exactly: its alarm-(re)arming call is added at those same two sites
+  (`ReadingApp.kt`, `BootReceiver.kt`), not a third `RolloverReceiver` site. No new
+  receiver classes needed for self-heal itself.
 - **Rejected approach**: folding this into `NudgeReceiver`'s existing hourly alarms
   (posting both notifications from one receiver). Fewer alarms, less scaffolding, but
   tangles two independent habits with independent completion state into one receiver —
