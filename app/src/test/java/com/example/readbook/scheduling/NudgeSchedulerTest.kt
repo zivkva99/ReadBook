@@ -140,4 +140,50 @@ class NudgeSchedulerTest {
         val alarms = shadowOf(alarmManager).getScheduledAlarms()
         assertEquals(epochMillisAt(LocalDate.of(2026, 7, 12), hour = 9), alarms[0].triggerAtTime)
     }
+
+    @Test
+    fun scheduleBibleReminderHoursForToday_onAnEnabledDay_schedulesAllFiveFutureHours() {
+        clock.millis = epochMillisAt(enabledDay, hour = 6)
+
+        scheduler.scheduleBibleReminderHoursForToday(enabledDay, config)
+
+        val alarms = shadowOf(alarmManager).getScheduledAlarms()
+        assertEquals(5, alarms.size)
+        val triggerTimes = alarms.map { it.triggerAtTime }.sorted()
+        assertEquals(
+            listOf(9, 10, 11, 12, 13).map { epochMillisAt(enabledDay, it) },
+            triggerTimes,
+        )
+    }
+
+    @Test
+    fun scheduleBibleReminderHoursForToday_onADisabledDay_schedulesNothing() {
+        clock.millis = epochMillisAt(disabledDay, hour = 6)
+
+        scheduler.scheduleBibleReminderHoursForToday(disabledDay, config)
+
+        assertTrue(shadowOf(alarmManager).getScheduledAlarms().isEmpty())
+    }
+
+    @Test
+    fun cancelBibleReminderHoursForToday_removesPreviouslyScheduledAlarms() {
+        clock.millis = epochMillisAt(enabledDay, hour = 6)
+        scheduler.scheduleBibleReminderHoursForToday(enabledDay, config)
+        assertEquals(5, shadowOf(alarmManager).getScheduledAlarms().size)
+
+        scheduler.cancelBibleReminderHoursForToday()
+
+        assertTrue(shadowOf(alarmManager).getScheduledAlarms().isEmpty())
+    }
+
+    @Test
+    fun bibleReminderAlarms_useADifferentRequestCodeRangeThanNudgeAlarms_soBothCanCoexist() {
+        clock.millis = epochMillisAt(enabledDay, hour = 6)
+
+        scheduler.scheduleNudgesForToday(enabledDay, config)
+        scheduler.scheduleBibleReminderHoursForToday(enabledDay, config)
+
+        // 5 nudge alarms + 5 bible reminder alarms, none cancelling one another out.
+        assertEquals(10, shadowOf(alarmManager).getScheduledAlarms().size)
+    }
 }

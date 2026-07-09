@@ -42,6 +42,24 @@ class NudgeScheduler(
         }
     }
 
+    /** Same hours/window/enabled-day rule as [scheduleNudgesForToday], targeting
+     * [BibleReadingReminderReceiver] instead — a fully separate alarm family so the two
+     * features' completion states never interfere with each other. */
+    fun scheduleBibleReminderHoursForToday(date: LocalDate, config: ReadingConfig) {
+        if (!isEnabledDay(date, config.enabledDaysMask)) return
+        for (hour in NUDGE_HOURS) {
+            val triggerAt = epochMillisAt(date, hour)
+            if (triggerAt <= clock.nowMillis()) continue
+            alarmManager.setWindow(AlarmManager.RTC_WAKEUP, triggerAt, WINDOW_LENGTH_MS, bibleReminderPendingIntent(hour))
+        }
+    }
+
+    fun cancelBibleReminderHoursForToday() {
+        for (hour in NUDGE_HOURS) {
+            alarmManager.cancel(bibleReminderPendingIntent(hour))
+        }
+    }
+
     /** Schedules the daily rollover job for 00:01 the day after [from]. */
     fun scheduleRollover(from: LocalDate) {
         val nextMidnight = epochMillisAt(from.plusDays(1), hour = 0, minute = 1)
@@ -102,6 +120,14 @@ class NudgeScheduler(
         )
     }
 
+    private fun bibleReminderPendingIntent(hour: Int): PendingIntent {
+        val intent = Intent(context, BibleReadingReminderReceiver::class.java).setAction(ACTION_BIBLE_REMINDER)
+        return PendingIntent.getBroadcast(
+            context, BIBLE_REMINDER_REQUEST_CODE_BASE + hour, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
     companion object {
         val NUDGE_HOURS = listOf(9, 10, 11, 12, 13)
         const val WINDOW_LENGTH_MS = 15 * 60 * 1000L
@@ -109,8 +135,10 @@ class NudgeScheduler(
         const val SNOOZE_REQUEST_CODE = 200
         const val SNOOZE_DELAY_MS = 15 * 60 * 1000L
         const val WEEKLY_SUMMARY_REQUEST_CODE = 400
+        const val BIBLE_REMINDER_REQUEST_CODE_BASE = 500
         const val ACTION_NUDGE = "com.example.readbook.action.NUDGE"
         const val ACTION_ROLLOVER = "com.example.readbook.action.ROLLOVER"
         const val ACTION_WEEKLY_SUMMARY = "com.example.readbook.action.WEEKLY_SUMMARY"
+        const val ACTION_BIBLE_REMINDER = "com.example.readbook.action.BIBLE_REMINDER"
     }
 }
